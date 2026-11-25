@@ -41,6 +41,10 @@ class Settings:
     # account the signed-in user can access.
     allowed_customer_ids: list[str] = field(default_factory=list)
 
+    # Budget or bid increases bigger than this (percent) need an extra, explicit
+    # confirmation before they're applied.
+    max_increase_pct: float = 50.0
+
     access_token_ttl: int = 3600
     refresh_token_ttl: int = 60 * 60 * 24 * 30
 
@@ -80,4 +84,5 @@ def load_settings() -> Settings:
         mcc_id=_digits(os.environ.get("MCC_ID")),
         developer_token=os.environ.get("GOOGLE_ADS_DEVELOPER_TOKEN") or None,
         allowed_customer_ids=[d for d in (_digits(x) for x in _csv(os.environ.get("ALLOWED_CUSTOMER_IDS"))) if d],
+        max_increase_pct=float(os.environ.get("MAX_INCREASE_PCT") or 50),
     )

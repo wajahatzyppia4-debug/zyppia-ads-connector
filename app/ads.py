@@ -19,6 +19,13 @@ API_VERSION = "v26"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 ACCOUNTS_CACHE_SECONDS = 600
 
+# Money metrics Google returns in micros without a "_micros" suffix.
+MICROS_WITHOUT_SUFFIX = {
+    "metrics.average_cpc", "metrics.average_cpm", "metrics.average_cost", "metrics.average_cpe",
+    "metrics.average_cpv", "metrics.cost_per_conversion", "metrics.cost_per_all_conversions",
+    "metrics.cost_per_current_model_attributed_conversion",
+}
+
 
 class AdsError(Exception):
     """An error safe to show to the user."""
@@ -104,6 +111,7 @@ class AdsGateway:
         self.settings = settings
         self._creds = _LRU(64)
         self._accounts: dict[str, tuple[float, dict[str, Account]]] = {}
+        self._types: GoogleAdsClient | None = None
 
     # ---- clients
 
@@ -199,6 +207,24 @@ class AdsGateway:
             )
         return accts[cid]
 
+    def types(self) -> GoogleAdsClient:
+        """A client used only to build request objects and enums (it never calls Google)."""
+        if self._types is None:
+            self._types = GoogleAdsClient(
+                credentials=Credentials(token="unused"), developer_token=None, version=API_VERSION, use_proto_plus=True
+            )
+        return self._types
+
+    def mutate(self, grt: str, acct: Account, operations: list[Any], validate_only: bool) -> Any:
+        """Run MutateOperations atomically (all or nothing). validate_only=True checks without changing."""
+        client = self.client(grt, acct.login_customer_id)
+        req = client.get_type("MutateGoogleAdsRequest")
+        req.customer_id = acct.customer_id
+        req.mutate_operations.extend(operations)
+        req.partial_failure = False
+        req.validate_only = validate_only
+        return client.get_service("GoogleAdsService").mutate(request=req)
+
     # ---- queries
 
     def search(self, grt: str, acct: Account, query: str, max_rows: int) -> tuple[list[dict[str, Any]], bool]:
@@ -243,6 +269,8 @@ def row_to_dict(row: Any, paths: list[str]) -> dict[str, Any]:
             v = _plain(_get_path(row, p))
         except AttributeError:
             continue
+        if p in MICROS_WITHOUT_SUFFIX and isinstance(v, (int, float)):
+            v = round(v / 1_000_000, 2)
         out[p] = v
         if p.endswith("_micros") and isinstance(v, (int, float)):
             out[p[: -len("_micros")]] = round(v / 1_000_000, 2)
