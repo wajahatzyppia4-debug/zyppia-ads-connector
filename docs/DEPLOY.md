@@ -50,10 +50,16 @@ All of this happens in the Google Cloud project **Zyppia Ads Connector**. Check 
 
 1. Open <https://console.cloud.google.com/> and click the **>_** icon (Activate Cloud Shell) at the top right.
    A black terminal opens at the bottom. If it asks to authorize, click **Authorize**.
-2. Copy this whole block, paste it into the black terminal, and press **Enter**:
+2. **Billing must be on first.** If you see a blue "Start your Free Trial with $300" banner, click **Start free** and finish it.
+3. Paste this one line and press **Enter**. Wait 1 to 2 minutes until it finishes and you see a line ending in `$` again:
 
 ```bash
 gcloud services enable run.googleapis.com secretmanager.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+```
+
+4. Then copy this whole block, paste it into the black terminal, and press **Enter**:
+
+```bash
 python3 -c "import secrets;print(secrets.token_urlsafe(48),end='')" | gcloud secrets create zyppia-token-key --data-file=-
 read -s -p "Paste the OAuth CLIENT SECRET here (it stays hidden), then press Enter: " S; echo
 printf '%s' "$S" | gcloud secrets create zyppia-oauth-client-secret --data-file=-; unset S
@@ -64,8 +70,8 @@ done
 echo; echo "DONE. Your connector address will be: https://zyppia-ads-connector-${PN}.us-central1.run.app"
 ```
 
-3. When it asks, paste the **Client secret** from Step 1b and press **Enter**. You won't see it as you paste, which is normal.
-4. At the end it prints **DONE** and your connector address. If that address doesn't match the one in Step 1b,
+5. When it asks, paste the **Client secret** from Step 1b and press **Enter**. You won't see it as you paste, which is normal.
+6. At the end it prints **DONE** and your connector address. If that address doesn't match the one in Step 1b,
    go back to the OAuth client and fix the redirect URI.
 
 If it says "project not set", run `gcloud config set project YOUR-PROJECT-ID`
