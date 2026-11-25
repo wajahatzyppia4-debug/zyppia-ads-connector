@@ -136,7 +136,8 @@ async def test_full_sign_in_and_tool_call(server):
     tools = {t["name"]: t for t in r.json()["result"]["tools"]}
     assert {"set_status", "update_budget", "create_search_campaign", "apply_change"} <= names
     assert tools["apply_change"]["annotations"]["destructiveHint"] is True
-    assert all(t["annotations"]["readOnlyHint"] for n, t in tools.items() if n != "apply_change")
+    assert tools["apply_changes"]["annotations"]["destructiveHint"] is True
+    assert all(t["annotations"]["readOnlyHint"] for n, t in tools.items() if n not in ("apply_change", "apply_changes"))
 
     seen = {}
 
@@ -212,3 +213,30 @@ async def test_preview_then_apply_over_mcp(server):
     r = await mcp_call(server, tokens["access_token"], "tools/call",
                        {"name": "apply_change", "arguments": {"confirm_token": prev["confirm_token"]}})
     assert result(r)["status"] == "done" and fake.calls[-1][0] is False
+
+
+@pytest.mark.asyncio
+async def test_apply_many_and_new_tools_listed(server):
+    from tests.test_writes import BUDGET_ROWS, FakeAds
+
+    _, tokens = await sign_in(server, "wajahat@zyppia.test")
+    fake = FakeAds(server.zyppia_ads.settings, [BUDGET_ROWS])
+    server.zyppia_writer.ads = fake
+    acct = Account("3993556480", "DXB", "AED", "Asia/Dubai", False, "ENABLED", "3476426639", "via manager")
+    server.zyppia_ads.account = lambda user, grt, cid: acct
+
+    r = await mcp_call(server, tokens["access_token"], "tools/list")
+    names = {t["name"] for t in r.json()["result"]["tools"]}
+    assert {"account_health_check", "website_to_campaign_plan", "add_sitelinks", "add_callouts", "add_call_button",
+            "add_structured_snippet", "set_ad_schedule", "set_bid_adjustments", "undo_change", "apply_changes"} <= names
+
+    toks = []
+    for amount in (21, 22):
+        r = await mcp_call(server, tokens["access_token"], "tools/call", {"name": "update_budget", "arguments": {
+            "customer_id": "399-355-6480", "campaign_id": "11", "daily_amount": amount}})
+        body = r.json()["result"]
+        toks.append((body.get("structuredContent") or json.loads(body["content"][0]["text"]))["confirm_token"])
+    r = await mcp_call(server, tokens["access_token"], "tools/call", {"name": "apply_changes", "arguments": {"confirm_tokens": toks}})
+    body = r.json()["result"]
+    out = body.get("structuredContent") or json.loads(body["content"][0]["text"])
+    assert out["done"] == 2 and out["failed"] == 0

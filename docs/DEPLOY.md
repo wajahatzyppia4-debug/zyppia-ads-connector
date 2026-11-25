@@ -141,6 +141,15 @@ Add their Google emails to `ALLOWED_EMAILS` in Cloud Run: **Edit & deploy new re
 Each person then adds the connector in their own Claude account and signs in with their own Google login.
 They see only the Google Ads accounts that their login can access.
 
+To let someone **only view reports** (no changes), also add their email to a variable named
+`READ_ONLY_EMAILS` (commas between emails).
+
+## Later: a spending limit per client
+
+Add a variable named `SPEND_LIMITS`, for example `399-355-6480=100,123-456-7890=50`.
+Claude then refuses any change that would make that account's running campaigns' daily budgets add up to more than
+that amount (in the account's own currency).
+
 ## Updates
 
 Every time a pull request is merged into `main`, Cloud Run rebuilds and updates the server automatically.

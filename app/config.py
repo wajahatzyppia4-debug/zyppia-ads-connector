@@ -44,6 +44,11 @@ class Settings:
     # Budget or bid increases bigger than this (percent) need an extra, explicit
     # confirmation before they're applied.
     max_increase_pct: float = 50.0
+    # Signed-in people who may only read: they can run reports but not change anything.
+    read_only_emails: list[str] = field(default_factory=list)
+    # Per-account cap on the total daily budget of all enabled campaigns,
+    # {customer_id: amount in the account's currency}. Changes that would go over are refused.
+    spend_limits: dict[str, float] = field(default_factory=dict)
 
     access_token_ttl: int = 3600
     refresh_token_ttl: int = 60 * 60 * 24 * 30
@@ -63,8 +68,24 @@ class Settings:
                 return True
         return False
 
+    def can_edit(self, email: str | None) -> bool:
+        return bool(email) and email.lower() not in self.read_only_emails
+
     def customer_allowed(self, customer_id: str) -> bool:
         return not self.allowed_customer_ids or customer_id in self.allowed_customer_ids
+
+
+def _limits(value: str | None) -> dict[str, float]:
+    """'399-355-6480=100, 1234567890=50' -> {'3993556480': 100.0, '1234567890': 50.0}"""
+    out = {}
+    for part in (value or "").split(","):
+        if "=" not in part:
+            continue
+        cid, amount = part.split("=", 1)
+        cid = _digits(cid)
+        if cid:
+            out[cid] = float(amount.strip())
+    return out
 
 
 def load_settings() -> Settings:
@@ -85,4 +106,6 @@ def load_settings() -> Settings:
         developer_token=os.environ.get("GOOGLE_ADS_DEVELOPER_TOKEN") or None,
         allowed_customer_ids=[d for d in (_digits(x) for x in _csv(os.environ.get("ALLOWED_CUSTOMER_IDS"))) if d],
         max_increase_pct=float(os.environ.get("MAX_INCREASE_PCT") or 50),
+        read_only_emails=_csv(os.environ.get("READ_ONLY_EMAILS")),
+        spend_limits=_limits(os.environ.get("SPEND_LIMITS")),
     )

@@ -13,6 +13,10 @@ Safety rules:
 - Removing campaigns or ad groups needs their exact names.
 - Tokens expire after 15 minutes, belong to the person who made them, and
   work once.
+- People in READ_ONLY_EMAILS can't change anything.
+- SPEND_LIMITS caps an account's total daily budget of enabled campaigns.
+- Applying a change returns an undo token (valid 7 days) that puts changed
+  values back and removes anything created. Removals can't be undone.
 """
 
 from __future__ import annotations
@@ -28,18 +32,20 @@ from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Any, Literal
 
+from google.ads.googleads.errors import GoogleAdsException
 from pydantic import Field
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from .ads import Account, AdsError, AdsGateway, pretty_id
+from .ads import Account, AdsError, AdsGateway, describe_ads_exception, pretty_id
 from .config import Settings
 from .sealing import Sealer
 
 audit = logging.getLogger("zyppia.audit")
 
 CHANGE_TTL = 900
+UNDO_TTL = 7 * 24 * 3600
 MAX_ITEMS = 200
 
 PREVIEW = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=True)
@@ -166,6 +172,44 @@ class Writer:
         self.ads = ads
         self.sealer = sealer
         self.used = _Used()
+        self.run = None  # set by register_write_tools
+
+    def prepared(self, tool: str, customer_id: str, build):
+        """Run a preview tool: look up the account, build the Change, preview it."""
+
+        def go(user, grt):
+            acct = self.ads.account(user, grt, customer_id)
+            return self.preview(user, grt, build(grt, acct))
+
+        return self.run(tool, customer_id, go)
+
+    def check_editor(self, user: str) -> None:
+        if not self.settings.can_edit(user):
+            raise AdsError(f"{user} has read-only access to this connector, so it can't make changes.")
+
+    def check_spend_limit(self, grt: str, acct: Account, ch: Change, statuses: dict[str, str] | None = None,
+                          budgets: dict[str, int] | None = None) -> None:
+        """Refuse a change that would push the account's total enabled daily budget over its SPEND_LIMITS cap.
+        statuses: {campaign_id: new status}; budgets: {budget resource name: new amount_micros}."""
+        limit = self.settings.spend_limits.get(acct.customer_id)
+        if limit is None:
+            return
+        rows = self.rows(grt, acct, "SELECT campaign.id, campaign.status, campaign_budget.resource_name, "
+                                    "campaign_budget.amount_micros FROM campaign WHERE campaign.status != 'REMOVED'")
+        seen: dict[str, int] = {}
+        for r in rows:
+            status = (statuses or {}).get(str(r["campaign.id"]), r["campaign.status"])
+            brn = r.get("campaign_budget.resource_name")
+            if status == "ENABLED" and brn:
+                seen[brn] = (budgets or {}).get(brn, r.get("campaign_budget.amount_micros") or 0)
+        total = sum(seen.values()) / 1_000_000
+        if total > limit + 1e-9:
+            raise AdsError(
+                f"Refused: {acct.name} has a spending limit of {limit:,.2f} {acct.currency}/day across all running "
+                f"campaigns, and this change would make it {total:,.2f}. Lower other budgets first, or ask an admin "
+                "to raise SPEND_LIMITS."
+            )
+        ch.lines.append(f"account total daily budget after this: {total:,.2f} of the {limit:,.2f} {acct.currency} limit")
 
     @property
     def t(self):
@@ -183,6 +227,7 @@ class Writer:
             ch.large.append(f"{label} goes up {pct:.0f}% (more than the {self.settings.max_increase_pct:.0f}% limit)")
 
     def preview(self, user: str, grt: str, ch: Change) -> dict[str, Any]:
+        self.check_editor(user)
         if not ch.ops:
             raise AdsError("There's nothing to change.")
         self.ads.mutate(grt, ch.acct, ch.ops, validate_only=True)  # raises if Google would reject it
@@ -220,6 +265,7 @@ class Writer:
             raise AdsError("This confirm token is invalid or expired (they last 15 minutes). Preview the change again.")
         if data["u"] != user:
             raise AdsError("This change was prepared by someone else. Preview it again under your own login.")
+        self.check_editor(user)
         if data["l"] and not confirm_large_change:
             raise AdsError(
                 "This change needs extra confirmation because: " + "; ".join(data["l"])
@@ -230,25 +276,143 @@ class Writer:
             raise AdsError("This change was already applied. Preview it again if you want to repeat it.")
         MO = type(self.op())
         ops = [MO.deserialize(base64.b64decode(o)) for o in data["o"]]
+        undo_ops, not_undoable = self.inverse_updates(grt, acct, ops)
         try:
             resp = self.ads.mutate(grt, acct, ops, validate_only=False)
         except Exception:
             self.used.release(token)
             raise
         results = []
-        for r in resp.mutate_operation_responses:
+        created = []
+        for op, r in zip(ops, resp.mutate_operation_responses):
             which = r._pb.WhichOneof("response")
             if which:
-                results.append(getattr(r, which).resource_name)
+                rn = getattr(r, which).resource_name
+                results.append(rn)
+                kind = op._pb.WhichOneof("operation")
+                if kind and getattr(op, kind)._pb.WhichOneof("operation") == "create":
+                    created.append(rn)
+        for op in ops:
+            kind = op._pb.WhichOneof("operation")
+            if kind and getattr(op, kind)._pb.WhichOneof("operation") == "remove":
+                not_undoable.add("removals")
+        undo_ops = self.removes_for_created(created) + undo_ops
         audit.info(json.dumps({"event": "apply", "user": user, "customer_id": acct.customer_id,
                                "title": data["t"], "details": data["s"], "results": results}))
-        return {
+        out = {
             "status": "done",
             "account": f"{acct.name} ({pretty_id(acct.customer_id)})",
             "change": data["t"],
             "details": data["s"],
             "changed": results,
         }
+        if undo_ops:
+            out["undo_token"] = self.sealer.seal("undo", {
+                "u": user, "c": acct.customer_id, "t": "Undo: " + data["t"], "s": data["s"],
+                "o": [base64.b64encode(MO.serialize(o)).decode() for o in undo_ops],
+            }, ttl=UNDO_TTL)
+            out["undo"] = "To reverse this within 7 days, call undo_change with undo_token (it previews first)."
+        if not_undoable:
+            out["cannot_undo"] = sorted(not_undoable)
+        return out
+
+    # ------------------------------------------------------------- undo
+
+    _UPDATABLE = {
+        "campaign_operation": "campaign", "ad_group_operation": "ad_group", "ad_group_ad_operation": "ad_group_ad",
+        "ad_group_criterion_operation": "ad_group_criterion", "campaign_budget_operation": "campaign_budget",
+        "campaign_criterion_operation": "campaign_criterion",
+    }
+    _REMOVABLE = {
+        "campaigns": "campaign_operation", "campaignBudgets": "campaign_budget_operation",
+        "adGroups": "ad_group_operation", "adGroupAds": "ad_group_ad_operation",
+        "adGroupCriteria": "ad_group_criterion_operation", "campaignCriteria": "campaign_criterion_operation",
+        "campaignAssets": "campaign_asset_operation", "customerAssets": "customer_asset_operation",
+        "adGroupAssets": "ad_group_asset_operation",
+    }
+
+    def inverse_updates(self, grt: str, acct: Account, ops: list[Any]) -> tuple[list[Any], set[str]]:
+        """Read the current values of everything an update will change, and build updates that put them back."""
+        undo, skipped = [], set()
+        for op in ops:
+            kind = op._pb.WhichOneof("operation")
+            inner = getattr(op, kind) if kind else None
+            if not inner or inner._pb.WhichOneof("operation") != "update":
+                continue
+            res = self._UPDATABLE.get(kind)
+            paths = list(inner.update_mask.paths)
+            if not res or not paths or any(p in _BIDDING_FIELD.values() or p.split(".")[0] in _BIDDING_FIELD.values()
+                                           for p in paths):
+                skipped.add("bidding strategy changes" if res else f"{kind} changes")
+                continue
+            rn = inner.update.resource_name
+            try:
+                rows = self.ads.search_raw(grt, acct, f"SELECT {', '.join(res + '.' + p for p in paths)} FROM {res} "
+                                                      f"WHERE {res}.resource_name = '{rn}'")
+                current = getattr(rows[0], res)
+            except Exception:  # noqa: BLE001 - undo is best effort, the change itself still goes ahead
+                skipped.add(f"{res.replace('_', ' ')} changes")
+                continue
+            back = self.op()
+            target = getattr(back, kind)
+            target.update.resource_name = rn
+            for p in paths:
+                *parents, leaf = p.split(".")
+                src, dst = current, target.update
+                for part in parents:
+                    src, dst = getattr(src, part), getattr(dst, part)
+                value = getattr(src, leaf)
+                if hasattr(value, "_pb"):  # a sub-message
+                    self.t.copy_from(getattr(dst, leaf), value)
+                elif not isinstance(value, (str, bytes, int, float, bool)) and hasattr(value, "__iter__"):
+                    getattr(dst, leaf).extend(list(value))  # a repeated field, e.g. final_urls
+                else:
+                    setattr(dst, leaf, value)
+                target.update_mask.paths.append(p)
+            undo.append(back)
+        return undo, skipped
+
+    def removes_for_created(self, created: list[str]) -> list[Any]:
+        """Undo for creates: remove what was created (top-level items only; children go with them)."""
+        kinds = [(rn.split("/")[2], rn) for rn in created if len(rn.split("/")) >= 4]
+        made_campaign = any(k == "campaigns" for k, _ in kinds)
+        made_groups = {rn.split("/")[3] for k, rn in kinds if k == "adGroups"}
+        out = []
+        order = ["campaigns", "adGroups", "adGroupAds", "adGroupCriteria", "campaignCriteria",
+                 "campaignAssets", "adGroupAssets", "customerAssets", "campaignBudgets"]
+        for kind in order:
+            for k, rn in kinds:
+                if k != kind:
+                    continue
+                if made_campaign and k in ("adGroups", "adGroupAds", "adGroupCriteria", "campaignCriteria", "campaignAssets", "adGroupAssets"):
+                    continue
+                if k in ("adGroupAds", "adGroupCriteria", "adGroupAssets") and rn.split("/")[3].split("~")[0] in made_groups:
+                    continue
+                op = self.op()
+                getattr(op, self._REMOVABLE[k]).remove = rn
+                out.append(op)
+        return out
+
+    def undo_preview(self, user: str, grt: str, token: str) -> dict[str, Any]:
+        data = self.sealer.unseal("undo", token.strip())
+        if not data:
+            raise AdsError("This undo token is invalid or older than 7 days.")
+        if data["u"] != user:
+            raise AdsError("Only the person who made the change can undo it with this token.")
+        acct = self.ads.account(user, grt, data["c"])
+        MO = type(self.op())
+        ch = Change(acct, data["t"])
+        ch.ops = [MO.deserialize(base64.b64decode(o)) for o in data["o"]]
+        ch.lines = ["reverse: " + line for line in data["s"]]
+        for op in ch.ops:
+            kind = op._pb.WhichOneof("operation")
+            inner = getattr(op, kind)
+            if inner._pb.WhichOneof("operation") == "update" and "status" in inner.update_mask.paths \
+                    and getattr(inner.update, "status").name == "ENABLED":
+                ch.large.append("undoing this turns something back on, which can start spending money")
+                break
+        ch.warnings.append("Anything changed by hand since then is overwritten.")
+        return self.preview(user, grt, ch)
 
     # ------------------------------------------------------------- builders
 
@@ -287,6 +451,8 @@ class Writer:
             ch.lines.append(f"{info['label']}: {info['status']} -> {status}")
             if status == "ENABLED" and info["status"] != "ENABLED":
                 ch.large.append(f"turning on {info['label']} can start spending money")
+        if entity == "campaign" and status == "ENABLED":
+            self.check_spend_limit(grt, acct, ch, statuses={k: "ENABLED" for k in found})
         return ch
 
     def _lookup(self, grt: str, acct: Account, entity: str, ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -379,6 +545,7 @@ class Writer:
             ch.warnings.append(f"This budget is shared by {r['campaign_budget.reference_count']} campaigns; all of them change.")
         ch.warnings.append("Google can spend up to 2x the daily budget on a single day; the monthly cap is about 30.4x daily.")
         self.flag_increase(ch, "the budget", old, new)
+        self.check_spend_limit(grt, acct, ch, budgets={r["campaign_budget.resource_name"]: new})
         return ch
 
     def bids(self, grt: str, acct: Account, level: str, items: list[dict[str, Any]]) -> Change:
@@ -833,13 +1000,8 @@ CID = Annotated[str, Field(description="Client account ID, e.g. 399-355-6480")]
 
 def register_write_tools(mcp: FastMCP, settings: Settings, ads: AdsGateway, sealer: Sealer, run) -> Writer:
     w = Writer(settings, ads, sealer)
-
-    def prepared(tool: str, customer_id: str, build):
-        def go(user, grt):
-            acct = ads.account(user, grt, customer_id)
-            return w.preview(user, grt, build(grt, acct))
-
-        return run(tool, customer_id, go)
+    w.run = run
+    prepared = w.prepared
 
     @mcp.tool(annotations=PREVIEW)
     async def set_status(
@@ -1034,5 +1196,37 @@ def register_write_tools(mcp: FastMCP, settings: Settings, ads: AdsGateway, seal
         """Make a change you previewed, after the person has seen the preview and said yes.
         Each token works once and expires after 15 minutes."""
         return await run("apply_change", None, lambda user, grt: w.apply(user, grt, confirm_token, confirm_large_change))
+
+    @mcp.tool(annotations=APPLY)
+    async def apply_changes(
+        confirm_tokens: Annotated[list[str], Field(description="confirm_tokens from several previews, e.g. one per account.")],
+        confirm_large_change: bool = False,
+    ) -> dict[str, Any]:
+        """Apply several previewed changes after one yes from the person, e.g. the same fix across many
+        accounts. Each is applied on its own: if one fails, the others still go ahead."""
+        if not confirm_tokens or len(confirm_tokens) > 50:
+            raise ValueError("Give 1 to 50 confirm tokens.")
+
+        def go(user, grt):
+            out = []
+            for tok in confirm_tokens:
+                try:
+                    out.append(w.apply(user, grt, tok, confirm_large_change))
+                except AdsError as e:
+                    out.append({"status": "failed", "error": str(e)})
+                except GoogleAdsException as e:
+                    out.append({"status": "failed", "error": describe_ads_exception(e)})
+            return {"done": sum(r["status"] == "done" for r in out), "failed": sum(r["status"] == "failed" for r in out),
+                    "results": out}
+
+        return await run("apply_changes", None, go)
+
+    @mcp.tool(annotations=PREVIEW)
+    async def undo_change(
+        undo_token: Annotated[str, Field(description="The undo_token returned by apply_change (valid 7 days).")],
+    ) -> dict[str, Any]:
+        """Preview reversing a change made with apply_change: changed values go back and created items are
+        removed. Like every change, it returns a confirm_token for apply_change."""
+        return await run("undo_change", None, lambda user, grt: w.undo_preview(user, grt, undo_token))
 
     return w

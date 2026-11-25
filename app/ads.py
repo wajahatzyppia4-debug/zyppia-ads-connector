@@ -227,6 +227,11 @@ class AdsGateway:
 
     # ---- queries
 
+    def search_raw(self, grt: str, acct: Account, query: str) -> list[Any]:
+        """Rows as API objects (for copying values exactly, e.g. to build an undo)."""
+        svc = self.client(grt, acct.login_customer_id).get_service("GoogleAdsService")
+        return search_raw_rows(svc, acct.customer_id, query)
+
     def search(self, grt: str, acct: Account, query: str, max_rows: int) -> tuple[list[dict[str, Any]], bool]:
         svc = self.client(grt, acct.login_customer_id).get_service("GoogleAdsService")
         rows: list[dict[str, Any]] = []
@@ -242,6 +247,10 @@ class AdsGateway:
             if truncated:
                 break
         return rows, truncated
+
+
+def search_raw_rows(svc: Any, customer_id: str, query: str) -> list[Any]:
+    return [row for batch in svc.search_stream(customer_id=customer_id, query=query) for row in batch.results]
 
 
 def _get_path(obj: Any, path: str) -> Any:
