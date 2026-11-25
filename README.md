@@ -6,19 +6,45 @@ Google login was added to directly.
 
 **Setup:** see [docs/DEPLOY.md](docs/DEPLOY.md) for a step-by-step guide.
 
-## What it can do (phase 1: read-only)
+## What it can do
+
+### Reading (phase 1)
 
 | Tool | What it does |
 | --- | --- |
 | `list_accounts` | Every account you can access, with currency and whether it's via the MCC or direct |
-| `performance_report` | Account, campaign, ad group, keyword, search term or ad performance for a date range |
+| `performance_report` | Account, campaign, ad group, keyword, search term or ad performance for a date range (rows include the IDs the change tools need) |
 | `run_gaql` | Any Google Ads Query Language report |
 | `change_history` | Who changed what in the last 29 days |
 | `find_locations` | Look up location IDs from place names |
 | `keyword_ideas` | Keyword Planner ideas, volumes, competition and bid ranges (needs Basic API access) |
 
-Changing campaigns, budgets, bids, ads and keywords comes in phase 2. Every change will go
-through a preview and an explicit confirmation first.
+### Changing (phase 2)
+
+Every change tool only **previews**: Google checks the change (`validate_only`) and nothing is modified.
+Claude shows the person what will change, and only after a yes calls `apply_change` with the preview's
+confirm token.
+
+| Tool | What it does |
+| --- | --- |
+| `set_status` | Pause or enable campaigns, ad groups, ads, keywords |
+| `remove_items` | Remove them for good (campaigns and ad groups need their exact names typed) |
+| `update_budget` | Change a campaign's daily budget |
+| `update_bids` | Change ad group or keyword max CPC bids |
+| `set_bidding_strategy` | Manual CPC, Maximize clicks, Maximize conversions (target CPA), Maximize conversion value (target ROAS) |
+| `add_keywords` / `add_negative_keywords` | Add keywords to an ad group, or negatives to a campaign or ad group |
+| `create_search_campaign` | Budget, bidding, locations, languages, and optionally an ad group with keywords and an ad, in one step. Always created **paused** |
+| `create_ad_group` / `create_responsive_search_ad` | Add ad groups and responsive search ads |
+| `update_campaign_settings` / `update_campaign_targeting` | Name, end date, networks; locations and languages |
+| `advanced_change` | Any other Google Ads API operation (assets, schedules, labels, and so on) |
+| `apply_change` | Make a previewed change |
+
+Safety rules:
+
+- Confirm tokens expire after 15 minutes, work once, and only for the person who made the preview.
+- These need an extra, explicit yes (`confirm_large_change`): budget or bid increases over
+  `MAX_INCREASE_PCT` (default 50%), turning anything on, removals, removing every location, and `advanced_change`.
+- Every preview and applied change is logged to Cloud Logging (`zyppia.audit`) with the user and the details.
 
 ## How it works
 

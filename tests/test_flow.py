@@ -133,7 +133,10 @@ async def test_full_sign_in_and_tool_call(server):
     r = await mcp_call(server, tokens["access_token"], "tools/list")
     names = {t["name"] for t in r.json()["result"]["tools"]}
     assert {"list_accounts", "run_gaql", "performance_report", "keyword_ideas", "find_locations", "change_history"} <= names
-    assert all(t["annotations"]["readOnlyHint"] for t in r.json()["result"]["tools"])
+    tools = {t["name"]: t for t in r.json()["result"]["tools"]}
+    assert {"set_status", "update_budget", "create_search_campaign", "apply_change"} <= names
+    assert tools["apply_change"]["annotations"]["destructiveHint"] is True
+    assert all(t["annotations"]["readOnlyHint"] for n, t in tools.items() if n != "apply_change")
 
     seen = {}
 
@@ -184,3 +187,28 @@ async def test_tokens_from_other_key_rejected(server):
     other = build_server(make_settings())
     r = await mcp_call(other, tokens["access_token"], "tools/list")
     assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_preview_then_apply_over_mcp(server):
+    from tests.test_writes import BUDGET_ROWS, FakeAds
+
+    _, tokens = await sign_in(server, "wajahat@zyppia.test")
+    fake = FakeAds(server.zyppia_ads.settings, [BUDGET_ROWS])
+    w = server.zyppia_writer
+    w.ads = fake
+    acct = Account("3993556480", "DXB", "AED", "Asia/Dubai", False, "ENABLED", "3476426639", "via manager")
+    server.zyppia_ads.account = lambda user, grt, cid: acct
+
+    def result(r):
+        body = r.json()["result"]
+        assert not body.get("isError"), body
+        return body.get("structuredContent") or json.loads(body["content"][0]["text"])
+
+    r = await mcp_call(server, tokens["access_token"], "tools/call",
+                       {"name": "update_budget", "arguments": {"customer_id": "399-355-6480", "campaign_id": "11", "daily_amount": 22}})
+    prev = result(r)
+    assert prev["confirm_token"] and fake.calls[-1][0] is True
+    r = await mcp_call(server, tokens["access_token"], "tools/call",
+                       {"name": "apply_change", "arguments": {"confirm_token": prev["confirm_token"]}})
+    assert result(r)["status"] == "done" and fake.calls[-1][0] is False

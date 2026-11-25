@@ -1,6 +1,7 @@
 """Zyppia Google Ads connector: an MCP server for Claude.
 
-Phase 1 is read-only: accounts, reports (GAQL), keyword ideas, change history.
+Phase 1: accounts, reports (GAQL), keyword ideas, change history (read-only).
+Phase 2: changes, always previewed first and applied with apply_change (see writes.py).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from mcp.types import ToolAnnotations
 from .ads import AdsError, AdsGateway, describe_ads_exception, error_codes, pretty_id
 from .auth import GoogleBackedOAuthProvider
 from .config import Settings, load_settings
+from .writes import register_write_tools
 
 log = logging.getLogger("zyppia")
 audit = logging.getLogger("zyppia.audit")
@@ -39,9 +41,19 @@ where their login was added directly.
 
 Start with list_accounts to find the customer ID for a client. Money values are in
 each account's own currency (shown in list_accounts); fields ending in _micros are
-also given in normal units without the suffix.
+also given in normal units without the suffix, and average_cpc / cost_per_conversion
+are already in normal units.
 
-This version is read-only: it cannot change campaigns, budgets or bids yet.
+Making changes always takes two steps:
+1. Call a change tool (set_status, update_budget, add_keywords, create_search_campaign,
+   ...). It only previews: Google checks the change and nothing is modified.
+2. Show the person exactly what will change, in plain words, and ask them to confirm.
+   Only after a clear yes, call apply_change with the confirm_token. If the preview
+   lists needs_extra_confirmation, name those items and get an explicit yes before
+   passing confirm_large_change=true. Never apply a change the person hasn't seen.
+
+New campaigns are created PAUSED. Prefer pausing over removing. IDs for ads and
+keywords are 'adGroupId~id' (both are columns in performance_report rows).
 """
 
 DATE_PRESETS = Literal[
@@ -53,28 +65,31 @@ LEVELS = {
     "account": ("customer", ["customer.descriptive_name"], None),
     "campaign": (
         "campaign",
-        ["campaign.id", "campaign.name", "campaign.status", "campaign.advertising_channel_type", "campaign_budget.amount_micros"],
+        ["campaign.id", "campaign.name", "campaign.status", "campaign.advertising_channel_type",
+         "campaign.bidding_strategy_type", "campaign_budget.amount_micros"],
         "campaign.status != 'REMOVED'",
     ),
     "ad_group": (
         "ad_group",
-        ["campaign.name", "ad_group.id", "ad_group.name", "ad_group.status"],
+        ["campaign.id", "campaign.name", "ad_group.id", "ad_group.name", "ad_group.status", "ad_group.cpc_bid_micros"],
         "ad_group.status != 'REMOVED'",
     ),
     "keyword": (
         "keyword_view",
-        ["campaign.name", "ad_group.name", "ad_group_criterion.keyword.text",
-         "ad_group_criterion.keyword.match_type", "ad_group_criterion.status"],
+        ["campaign.id", "campaign.name", "ad_group.id", "ad_group.name", "ad_group_criterion.criterion_id",
+         "ad_group_criterion.keyword.text", "ad_group_criterion.keyword.match_type", "ad_group_criterion.status",
+         "ad_group_criterion.effective_cpc_bid_micros"],
         "ad_group_criterion.status != 'REMOVED'",
     ),
     "search_term": (
         "search_term_view",
-        ["campaign.name", "ad_group.name", "search_term_view.search_term", "search_term_view.status"],
+        ["campaign.id", "campaign.name", "ad_group.id", "ad_group.name", "search_term_view.search_term",
+         "search_term_view.status"],
         None,
     ),
     "ad": (
         "ad_group_ad",
-        ["campaign.name", "ad_group.name", "ad_group_ad.ad.id", "ad_group_ad.ad.type",
+        ["campaign.id", "campaign.name", "ad_group.id", "ad_group.name", "ad_group_ad.ad.id", "ad_group_ad.ad.type",
          "ad_group_ad.status", "ad_group_ad.ad.final_urls"],
         "ad_group_ad.status != 'REMOVED'",
     ),
@@ -331,6 +346,10 @@ def build_server(settings: Settings) -> FastMCP:
             return {"account": acct.name, "currency": acct.currency, "count": len(ideas), "ideas": ideas}
 
         return await run("keyword_ideas", customer_id, go)
+
+    # ---------------------------------------------------------------- changes (phase 2)
+
+    mcp.zyppia_writer = register_write_tools(mcp, settings, ads, provider.sealer, run)
 
     # ---------------------------------------------------------------- plain routes
 
