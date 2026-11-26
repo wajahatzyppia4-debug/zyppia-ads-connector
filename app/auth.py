@@ -4,8 +4,8 @@ Flow when someone adds the connector in Claude:
 
 1. Claude registers itself (dynamic client registration) and sends the user to
    our /authorize endpoint.
-2. We send the user on to Google sign-in, asking for their email and Google
-   Ads access (offline, so we get a Google refresh token).
+2. We send the user on to Google sign-in, asking for their email, Google
+   Ads access and Tag Manager access (offline, so we get a Google refresh token).
 3. Google sends them back to /oauth/google/callback. We check the email is on
    the allowlist, then hand Claude an authorization code.
 4. Claude swaps the code for our access + refresh tokens.
@@ -45,7 +45,14 @@ log = logging.getLogger("zyppia.auth")
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 ADWORDS_SCOPE = "https://www.googleapis.com/auth/adwords"
-GOOGLE_SCOPES = ["openid", "email", ADWORDS_SCOPE]
+# Tag Manager (phase 4): edit containers, save versions, publish. Optional at sign-in:
+# without them Google Ads still works and the Tag Manager tools ask to reconnect.
+TAGMANAGER_SCOPES = [
+    "https://www.googleapis.com/auth/tagmanager.edit.containers",
+    "https://www.googleapis.com/auth/tagmanager.edit.containerversions",
+    "https://www.googleapis.com/auth/tagmanager.publish",
+]
+GOOGLE_SCOPES = ["openid", "email", ADWORDS_SCOPE, *TAGMANAGER_SCOPES]
 
 CODE_TTL = 300
 STATE_TTL = 900

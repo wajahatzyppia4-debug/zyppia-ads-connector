@@ -2,6 +2,8 @@
 
 Phase 1: accounts, reports (GAQL), keyword ideas, change history (read-only).
 Phase 2: changes, always previewed first and applied with apply_change (see writes.py).
+Phase 3: health check, extensions, undo (assets.py, health.py).
+Phase 4: conversion actions and Google Tag Manager (conversions.py, gtm.py).
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ from .auth import GoogleBackedOAuthProvider
 from .config import Settings, load_settings
 from . import research
 from .assets import register_extra_tools
+from .conversions import register_conversion_tools
+from .gtm import register_gtm_tools
 from .health import HealthCheck
 from .writes import register_write_tools
 
@@ -63,6 +67,15 @@ a campaign from a client's site, start with website_to_campaign_plan.
 
 New campaigns are created PAUSED. Prefer pausing over removing. IDs for ads and
 keywords are 'adGroupId~id' (both are columns in performance_report rows).
+
+Conversion tracking: list_conversion_actions shows each conversion action, its problems
+and its Tag Manager IDs; create_/update_/remove_conversion_action change them. Google Tag
+Manager: gtm_list_containers, then gtm_workspace to see tags, triggers and variables;
+gtm_tag / gtm_trigger / gtm_variable change them and gtm_publish puts the workspace live.
+To track a new website conversion end to end (Google Ads conversion action + GTM trigger,
+tag, Conversion Linker), use setup_conversion_tracking. Tag Manager changes use the same
+preview -> apply_change -> undo_change steps. If a Tag Manager tool says the sign-in lacks
+Tag Manager access, tell the person to reconnect the connector and tick the Tag Manager boxes.
 """
 
 DATE_PRESETS = Literal[
@@ -318,6 +331,11 @@ def build_server(settings: Settings) -> FastMCP:
 
     mcp.zyppia_writer = register_write_tools(mcp, settings, ads, provider.sealer, run)
     register_extra_tools(mcp, mcp.zyppia_writer)
+
+    # ---------------------------------------------------------------- phase 4: conversions and Tag Manager
+
+    conv = register_conversion_tools(mcp, mcp.zyppia_writer)
+    mcp.zyppia_gtm = register_gtm_tools(mcp, mcp.zyppia_writer, conv)
 
     # ---------------------------------------------------------------- phase 3: audits and planning
 

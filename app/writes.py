@@ -17,6 +17,10 @@ Safety rules:
 - SPEND_LIMITS caps an account's total daily budget of enabled campaigns.
 - Applying a change returns an undo token (valid 7 days) that puts changed
   values back and removes anything created. Removals can't be undone.
+
+A Change can also carry Google Tag Manager steps (phase 4, see gtm.py). They
+are sealed into the same confirm token and run by apply_change after the
+Google Ads operations, so one yes covers both.
 """
 
 from __future__ import annotations
@@ -92,6 +96,19 @@ def _pair(value: str, what: str) -> tuple[int, int]:
     return _num(parts[0], "ad group ID"), _num(parts[1], f"{what} ID")
 
 
+_SEND_TO = re.compile(r"AW-(\d+)/([A-Za-z0-9_-]+)")
+
+
+def send_to_ids(snippets: Any) -> dict[str, str] | None:
+    """Pull the conversion ID and label ('AW-123/abcDEF') out of a conversion action's tag snippets."""
+    for sn in snippets or []:
+        text = sn.get("event_snippet", "") if isinstance(sn, dict) else str(sn)
+        m = _SEND_TO.search(text or "")
+        if m:
+            return {"conversion_id": m.group(1), "conversion_label": m.group(2)}
+    return None
+
+
 def _ids_clause(ids) -> str:
     return "(" + ", ".join(str(i) for i in sorted(set(ids))) + ")"
 
@@ -132,12 +149,23 @@ def check_rsa(headlines: list[str], descriptions: list[str], path1: str | None, 
 
 @dataclass
 class Change:
-    acct: Account
+    acct: Account | None  # None for a Tag Manager-only change
     title: str
     ops: list[Any] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     large: list[str] = field(default_factory=list)  # reasons it needs the extra confirmation
+    gtm: list[dict[str, Any]] = field(default_factory=list)  # Tag Manager steps (gtm.py), run after ops
+    extra: dict[str, Any] = field(default_factory=dict)  # e.g. {"label": True}: look up a new conversion's tag IDs
+    where: str | None = None  # where a Tag Manager-only change happens (container and workspace)
+
+
+class PartialChange(AdsError):
+    """Some steps of a change were made before one failed. Carries what was done and how to undo it."""
+
+    def __init__(self, message: str, results: list[str], undo: list[dict[str, Any]], notes: set[str]):
+        super().__init__(message)
+        self.results, self.undo, self.notes = results, undo, notes
 
 
 class _Used:
@@ -173,6 +201,7 @@ class Writer:
         self.sealer = sealer
         self.used = _Used()
         self.run = None  # set by register_write_tools
+        self.gtm = None  # Tag Manager gateway (gtm.GtmGateway), set by register_gtm_tools
 
     def prepared(self, tool: str, customer_id: str, build):
         """Run a preview tool: look up the account, build the Change, preview it."""
@@ -228,25 +257,36 @@ class Writer:
 
     def preview(self, user: str, grt: str, ch: Change) -> dict[str, Any]:
         self.check_editor(user)
-        if not ch.ops:
+        if not ch.ops and not ch.gtm:
             raise AdsError("There's nothing to change.")
-        self.ads.mutate(grt, ch.acct, ch.ops, validate_only=True)  # raises if Google would reject it
+        if ch.ops:
+            self.ads.mutate(grt, ch.acct, ch.ops, validate_only=True)  # raises if Google would reject it
         MO = type(self.op())
+        cid = ch.acct.customer_id if ch.acct else None
         payload = {
             "u": user,
-            "c": ch.acct.customer_id,
+            "c": cid,
             "t": ch.title,
             "s": ch.lines,
             "l": ch.large,
             "o": [base64.b64encode(MO.serialize(o)).decode() for o in ch.ops],
         }
+        if ch.gtm:
+            payload["g"] = ch.gtm
+            payload["w"] = ch.where
+        if ch.extra:
+            payload["x"] = ch.extra
         token = self.sealer.seal("change", payload, ttl=CHANGE_TTL)
-        audit.info(json.dumps({"event": "preview", "user": user, "customer_id": ch.acct.customer_id,
-                               "title": ch.title, "operations": len(ch.ops), "large": ch.large}))
+        audit.info(json.dumps({"event": "preview", "user": user, "customer_id": cid, "title": ch.title,
+                               "operations": len(ch.ops), "tag_manager_steps": len(ch.gtm), "large": ch.large}))
+        if ch.ops:
+            status = "preview_ok (Google checked it, nothing changed yet)"
+        else:
+            status = "preview_ok (checked by the connector; Tag Manager has no test mode, so nothing changed yet)"
         out = {
-            "status": "preview_ok (Google checked it, nothing changed yet)",
-            "account": f"{ch.acct.name} ({pretty_id(ch.acct.customer_id)})",
-            "currency": ch.acct.currency,
+            "status": status,
+            "account": f"{ch.acct.name} ({pretty_id(ch.acct.customer_id)})" if ch.acct else ch.where,
+            "currency": ch.acct.currency if ch.acct else None,
             "change": ch.title,
             "details": ch.lines,
             "warnings": ch.warnings,
@@ -257,6 +297,10 @@ class Writer:
                 large=" and confirm_large_change=true (the person must agree to the flagged items)" if ch.large else ""
             ),
         }
+        if ch.acct and ch.where:
+            out["tag_manager"] = ch.where
+        if not ch.acct:
+            del out["currency"]
         return out
 
     def apply(self, user: str, grt: str, token: str, confirm_large_change: bool) -> dict[str, Any]:
@@ -271,64 +315,110 @@ class Writer:
                 "This change needs extra confirmation because: " + "; ".join(data["l"])
                 + ". Ask the person to agree to that explicitly, then call apply_change again with confirm_large_change=true."
             )
-        acct = self.ads.account(user, grt, data["c"])
+        acct = self.ads.account(user, grt, data["c"]) if data.get("c") else None
+        steps = data.get("g") or []
+        if steps and self.gtm is None:
+            raise AdsError("Tag Manager isn't set up on this server.")
         if not self.used.claim(token):
             raise AdsError("This change was already applied. Preview it again if you want to repeat it.")
         MO = type(self.op())
         ops = [MO.deserialize(base64.b64decode(o)) for o in data["o"]]
-        undo_ops, not_undoable = self.inverse_updates(grt, acct, ops)
-        try:
-            resp = self.ads.mutate(grt, acct, ops, validate_only=False)
-        except Exception:
-            self.used.release(token)
-            raise
-        results = []
-        created = []
-        for op, r in zip(ops, resp.mutate_operation_responses):
-            which = r._pb.WhichOneof("response")
-            if which:
-                rn = getattr(r, which).resource_name
-                results.append(rn)
+        results: list[str] = []
+        created: list[str] = []
+        undo_ops: list[Any] = []
+        not_undoable: set[str] = set()
+        if ops:
+            undo_ops, not_undoable = self.inverse_updates(grt, acct, ops)
+            try:
+                resp = self.ads.mutate(grt, acct, ops, validate_only=False)
+            except Exception:
+                self.used.release(token)
+                raise
+            for op, r in zip(ops, resp.mutate_operation_responses):
+                which = r._pb.WhichOneof("response")
+                if which:
+                    rn = getattr(r, which).resource_name
+                    results.append(rn)
+                    kind = op._pb.WhichOneof("operation")
+                    if kind and getattr(op, kind)._pb.WhichOneof("operation") == "create":
+                        created.append(rn)
+            for op in ops:
                 kind = op._pb.WhichOneof("operation")
-                if kind and getattr(op, kind)._pb.WhichOneof("operation") == "create":
-                    created.append(rn)
-        for op in ops:
-            kind = op._pb.WhichOneof("operation")
-            if kind and getattr(op, kind)._pb.WhichOneof("operation") == "remove":
-                not_undoable.add("removals")
-        undo_ops = self.removes_for_created(created) + undo_ops
-        audit.info(json.dumps({"event": "apply", "user": user, "customer_id": acct.customer_id,
-                               "title": data["t"], "details": data["s"], "results": results}))
+                if kind and getattr(op, kind)._pb.WhichOneof("operation") == "remove":
+                    not_undoable.add("removals")
+            undo_ops = self.removes_for_created(created) + undo_ops
+
+        gtm_undo: list[dict[str, Any]] = []
+        gtm_error = None
+        if steps:
+            ctx: dict[str, Any] = {}
+            try:
+                if (data.get("x") or {}).get("label"):
+                    ctx.update(self.new_conversion_ids(grt, acct, created))
+                gtm_results, gtm_undo, notes = self.gtm.execute(grt, steps, ctx)
+                results += gtm_results
+                not_undoable |= notes
+            except PartialChange as e:
+                results += e.results
+                gtm_undo, gtm_error = e.undo, str(e)
+                not_undoable |= e.notes
+            except AdsError as e:
+                gtm_error = str(e)
+            if gtm_error and not results:
+                self.used.release(token)
+                raise AdsError(gtm_error)
+
+        audit.info(json.dumps({"event": "apply", "user": user, "customer_id": data.get("c"), "title": data["t"],
+                               "details": data["s"], "results": results, "error": gtm_error}))
         out = {
-            "status": "done",
-            "account": f"{acct.name} ({pretty_id(acct.customer_id)})",
+            "status": "done" if not gtm_error else "partly done",
+            "account": f"{acct.name} ({pretty_id(acct.customer_id)})" if acct else data.get("w"),
             "change": data["t"],
             "details": data["s"],
             "changed": results,
         }
-        if undo_ops:
+        if gtm_error:
+            out["error"] = ("Some of this was made, then Tag Manager stopped: " + gtm_error
+                            + " Tell the person what was done and what wasn't. The undo token reverses the part that was made.")
+        if undo_ops or gtm_undo:
             out["undo_token"] = self.sealer.seal("undo", {
-                "u": user, "c": acct.customer_id, "t": "Undo: " + data["t"], "s": data["s"],
+                "u": user, "c": data.get("c"), "w": data.get("w"), "t": "Undo: " + data["t"], "s": data["s"],
                 "o": [base64.b64encode(MO.serialize(o)).decode() for o in undo_ops],
+                "g": gtm_undo,
             }, ttl=UNDO_TTL)
             out["undo"] = "To reverse this within 7 days, call undo_change with undo_token (it previews first)."
         if not_undoable:
             out["cannot_undo"] = sorted(not_undoable)
         return out
 
+    def new_conversion_ids(self, grt: str, acct: Account | None, created: list[str]) -> dict[str, str]:
+        """Conversion ID and label of a conversion action this change just created (for its Tag Manager tag)."""
+        rn = next((r for r in created if "/conversionActions/" in r), None)
+        if not acct or not rn:
+            raise AdsError("The new conversion action wasn't found, so its Tag Manager tag wasn't created.")
+        for attempt in range(3):
+            rows = self.rows(grt, acct, "SELECT conversion_action.tag_snippets FROM conversion_action "
+                                        f"WHERE conversion_action.resource_name = '{rn}'")
+            ids = send_to_ids(rows[0].get("conversion_action.tag_snippets") if rows else None)
+            if ids:
+                return ids
+            time.sleep(1.5 * (attempt + 1))
+        raise AdsError(f"Google hasn't made the tag code for the new conversion action ({rn}) yet. "
+                       "Run setup_conversion_tracking again with conversion_action_id to add the Tag Manager part.")
+
     # ------------------------------------------------------------- undo
 
     _UPDATABLE = {
         "campaign_operation": "campaign", "ad_group_operation": "ad_group", "ad_group_ad_operation": "ad_group_ad",
         "ad_group_criterion_operation": "ad_group_criterion", "campaign_budget_operation": "campaign_budget",
-        "campaign_criterion_operation": "campaign_criterion",
+        "campaign_criterion_operation": "campaign_criterion", "conversion_action_operation": "conversion_action",
     }
     _REMOVABLE = {
         "campaigns": "campaign_operation", "campaignBudgets": "campaign_budget_operation",
         "adGroups": "ad_group_operation", "adGroupAds": "ad_group_ad_operation",
         "adGroupCriteria": "ad_group_criterion_operation", "campaignCriteria": "campaign_criterion_operation",
         "campaignAssets": "campaign_asset_operation", "customerAssets": "customer_asset_operation",
-        "adGroupAssets": "ad_group_asset_operation",
+        "adGroupAssets": "ad_group_asset_operation", "conversionActions": "conversion_action_operation",
     }
 
     def inverse_updates(self, grt: str, acct: Account, ops: list[Any]) -> tuple[list[Any], set[str]]:
@@ -379,10 +469,10 @@ class Writer:
         made_groups = {rn.split("/")[3] for k, rn in kinds if k == "adGroups"}
         out = []
         order = ["campaigns", "adGroups", "adGroupAds", "adGroupCriteria", "campaignCriteria",
-                 "campaignAssets", "adGroupAssets", "customerAssets", "campaignBudgets"]
+                 "campaignAssets", "adGroupAssets", "customerAssets", "campaignBudgets", "conversionActions"]
         for kind in order:
             for k, rn in kinds:
-                if k != kind:
+                if k != kind or k not in self._REMOVABLE:
                     continue
                 if made_campaign and k in ("adGroups", "adGroupAds", "adGroupCriteria", "campaignCriteria", "campaignAssets", "adGroupAssets"):
                     continue
@@ -399,11 +489,15 @@ class Writer:
             raise AdsError("This undo token is invalid or older than 7 days.")
         if data["u"] != user:
             raise AdsError("Only the person who made the change can undo it with this token.")
-        acct = self.ads.account(user, grt, data["c"])
+        acct = self.ads.account(user, grt, data["c"]) if data.get("c") else None
         MO = type(self.op())
-        ch = Change(acct, data["t"])
+        ch = Change(acct, data["t"], where=data.get("w"))
         ch.ops = [MO.deserialize(base64.b64decode(o)) for o in data["o"]]
+        ch.gtm = data.get("g") or []
         ch.lines = ["reverse: " + line for line in data["s"]]
+        ch.lines += [f"Tag Manager: {st['d']}" for st in ch.gtm]
+        if any(st.get("k") == "publish" for st in ch.gtm):
+            ch.large.append("this republishes the earlier Tag Manager version, which changes the live website")
         for op in ch.ops:
             kind = op._pb.WhichOneof("operation")
             inner = getattr(op, kind)
@@ -412,6 +506,9 @@ class Writer:
                 ch.large.append("undoing this turns something back on, which can start spending money")
                 break
         ch.warnings.append("Anything changed by hand since then is overwritten.")
+        if ch.gtm and not any(st.get("k") == "publish" for st in ch.gtm):
+            ch.warnings.append("Tag Manager undo changes the workspace. If the earlier change was published, "
+                               "publish again (gtm_publish) for the website to change back.")
         return self.preview(user, grt, ch)
 
     # ------------------------------------------------------------- builders

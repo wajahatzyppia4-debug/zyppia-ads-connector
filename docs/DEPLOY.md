@@ -24,11 +24,12 @@ All of this happens in the Google Cloud project **Zyppia Ads Connector**. Check 
 2. **Branding:** set the app name to `Zyppia Ads Connector` and enter your support email.
 3. **Audience:** choose **External**, then click **Publish app** so the status says **In production**.
    *(If it stays on "Testing", everyone gets signed out every 7 days.)*
-4. **Data access:** click **Add or remove scopes** and tick these three:
+4. **Data access:** click **Add or remove scopes** and tick these:
    - `openid`
    - `.../auth/userinfo.email`
    - `.../auth/adwords` (Google Ads API). If it's not in the list, paste
      `https://www.googleapis.com/auth/adwords` into "Manually add scopes".
+   - The three Tag Manager ones (see "Phase 4" below).
    Then click **Update**, then **Save**.
 
 ### 1b. OAuth client
@@ -149,6 +150,38 @@ To let someone **only view reports** (no changes), also add their email to a var
 Add a variable named `SPEND_LIMITS`, for example `399-355-6480=100,123-456-7890=50`.
 Claude then refuses any change that would make that account's running campaigns' daily budgets add up to more than
 that amount (in the account's own currency).
+
+## Phase 4: turn on Google Tag Manager
+
+Do this once, after merging the Phase 4 pull request. Sign in as **wajahatzyppia4@gmail.com**.
+
+1. **Turn on the Tag Manager API.** Open <https://console.cloud.google.com/apis/library/tagmanager.googleapis.com>,
+   check the project at the top says **Zyppia Ads Connector**, and click **Enable**.
+2. **Add the Tag Manager permissions.** Open <https://console.cloud.google.com/auth/scopes>, click
+   **Add or remove scopes**, and paste these three lines into **Manually add scopes**, then click
+   **Add to table**, **Update**, and **Save**:
+
+   ```
+   https://www.googleapis.com/auth/tagmanager.edit.containers
+   https://www.googleapis.com/auth/tagmanager.edit.containerversions
+   https://www.googleapis.com/auth/tagmanager.publish
+   ```
+3. **Wait for the update.** Cloud Run rebuilds by itself after the merge (3 to 6 minutes).
+4. **Sign in again in Claude.** Go to **Settings**, then **Connectors**, then **Zyppia Google Ads**. Click
+   **Disconnect**, then **Connect**. On the Google screen, tick **every** box (Google Ads and the Tag Manager ones)
+   and click **Continue**.
+5. **Give your login access to each client's container.** In Tag Manager (<https://tagmanager.google.com>), each
+   container needs your Google login under **Admin**, then **User Management**, with **Publish** permission.
+   (If the client owns the container, ask them to add **wajahatzyppia4@gmail.com** with Publish.)
+
+### Try it
+
+- "List my Tag Manager containers."
+- "Show the conversion actions in DXB - Travel And Tourism and tell me what's wrong."
+- "Set up a 'Contact form' conversion for DXB - Travel And Tourism in GTM-XXXXXX that counts when the page URL
+  contains /thank-you."
+
+Nothing goes live on a website until you agree to publish.
 
 ## Updates
 

@@ -51,6 +51,28 @@ confirm token.
 | `undo_change` | Reverse an applied change within 7 days (changed values go back, created items are removed) |
 | `apply_changes` | Apply several previews after one yes, e.g. the same fix across many accounts |
 
+### Phase 4: conversion tracking and Google Tag Manager
+
+| Tool | What it does |
+| --- | --- |
+| `list_conversion_actions` | Every conversion action with type, category, primary/secondary, counting, value, lookback, attribution, conversions in the last 30 days, its Tag Manager conversion ID and label, and likely problems (no conversions, leads counted many times, duplicate primaries) |
+| `create_conversion_action` | Website, phone call (from ads, from website, number taps) or imported (offline clicks/calls) conversion actions |
+| `update_conversion_action` | Fix name, status (or HIDDEN), category, primary/secondary, counting, value, currency, lookback, call length, attribution. Can be undone |
+| `remove_conversion_action` | Remove for good (exact names typed, extra confirmation) |
+| `gtm_list_containers` | Every Tag Manager account and container the login can access (GTM-... IDs, domains) |
+| `gtm_workspace` | Tags, triggers, variables, built-in variables, unpublished changes, live version, and problems (no Conversion Linker, tags that never fire, missing labels) |
+| `gtm_get` | Read any Tag Manager item in full |
+| `gtm_tag` / `gtm_trigger` / `gtm_variable` | Create, change or delete tags (Google Ads conversion, Conversion Linker, Google tag, remarketing, custom HTML, any type), triggers (page views, custom events, clicks, link clicks, forms, ...) and variables (dataLayer, URL, cookie, DOM, JavaScript, ...). Built-in variables a trigger needs (Click URL, Form ID, ...) are turned on automatically |
+| `gtm_publish` | Save a version of the workspace and put it live (extra confirmation; undo republishes the version that was live before) |
+| `gtm_advanced_change` | Any other Tag Manager API call (workspaces, folders, templates, environments, ...), extra confirmation |
+| `setup_conversion_tracking` | One step: create the Google Ads conversion action (or use an existing one) **and** the GTM trigger, Google Ads conversion tag with the right ID and label, Conversion Linker and Google tag if missing, optionally publish. One preview, one yes, one undo |
+
+Tag Manager has no "check only" mode, so its previews are checked by the connector (container, workspace, names,
+trigger and variable references) and the exact API calls are sealed into the confirm token. Changes go into a
+workspace and reach the website only when it's published, which always needs extra confirmation. Publishing,
+deleting, custom HTML/JavaScript and raw API calls are flagged. If the Google Ads part of a combined change works
+and a Tag Manager step fails, the result says "partly done" and the undo token reverses what was made.
+
 Safety rules:
 
 - Confirm tokens expire after 15 minutes, work once, and only for the person who made the preview.
@@ -65,7 +87,7 @@ Safety rules:
 ## How it works
 
 - **Sign-in:** Claude connects using OAuth. The server sends you to "Sign in with Google", which asks for
-  your email and Google Ads access, and lets in only emails listed in `ALLOWED_EMAILS`.
+  your email, Google Ads access and Tag Manager access (edit containers, save versions, publish), and lets in only emails listed in `ALLOWED_EMAILS`.
 - **No database:** client registrations, codes and tokens are encrypted and signed with `TOKEN_KEY`
   (Fernet), so the server stores nothing. Each person's Google refresh token is kept only inside their
   encrypted Claude token. Changing `TOKEN_KEY` signs everyone out.

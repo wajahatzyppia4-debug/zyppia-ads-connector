@@ -44,6 +44,8 @@ class FakeAds(AdsGateway):
             inner = getattr(op, kind)
             verb = inner._pb.WhichOneof("operation")
             rn = inner.remove if verb == "remove" else getattr(inner, verb).resource_name
+            if verb == "create" and not rn and kind == "conversion_action_operation":
+                rn = f"customers/{acct.customer_id}/conversionActions/-5"
             if verb == "create":
                 head, _, ident = rn.rpartition("/")
                 rn = f"{head}/{100 + abs(int(ident))}" if ident.lstrip("-").isdigit() else rn or "customers/x/new/1"
