@@ -86,7 +86,7 @@ rm -f "$ENV_FILE" "$ENV_FILE.image"
 
 say "4/4 Checking it answers ..."
 for i in 1 2 3 4 5 6; do
-  if curl -fsS "$URL/healthz" | grep -q '"ok"'; then
+  if curl -fsS "$URL/.well-known/oauth-authorization-server" | grep -q authorization_endpoint; then
     say "DONE. The GMB connector is running. Google Ads was not touched."
     echo
     echo "If this is the first time, finish with two things:"
@@ -99,4 +99,4 @@ for i in 1 2 3 4 5 6; do
   fi
   sleep 10
 done
-fail "The GMB server didn't answer at $URL/healthz. Google Ads is not affected. Send a screenshot of this to Claude."
+fail "The GMB server didn't answer at $URL/.well-known/oauth-authorization-server. Google Ads is not affected. Send a screenshot of this to Claude."
