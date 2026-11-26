@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pytest
 
 from app.ads import AdsError
-from app.auth import GOOGLE_SCOPES
+from app.auth import ADS_SCOPES, GMB_SCOPES
 from app.gbp import BusinessProfile, hours_text, parse_hours
 from app.google_apis import explain
 from app.ranktrack import FREE_MASK, Places, RankTracker, grid_points
@@ -45,7 +45,8 @@ def env(extra=None):
 
 
 def test_scope_and_plain_errors():
-    assert "https://www.googleapis.com/auth/business.manage" in GOOGLE_SCOPES
+    assert "https://www.googleapis.com/auth/business.manage" in GMB_SCOPES
+    assert "https://www.googleapis.com/auth/business.manage" not in ADS_SCOPES
     msg = explain("gbp_info", 429, "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute'")
     assert "approved" in msg and "support.google.com/business/contact/api_default" in msg
     assert "Manager" in explain("gbp_v4", 403, "The caller does not have permission")

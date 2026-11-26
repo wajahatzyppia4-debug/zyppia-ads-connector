@@ -138,6 +138,11 @@ Safety rules:
 
 ### Phase 6: Google Business Profile and free local rank tracking
 
+These tools are a **separate connector, Zyppia GMB**. The same code runs as a second Cloud Run server
+(`zyppia-gmb-connector`) with `CONNECTOR=gmb`: it has only the tools below plus `apply_change`, `apply_changes` and
+`undo_change`, asks Google only for the Business Profile permission, and has its own sign-in key. The Zyppia Google
+Ads connector (`CONNECTOR` unset or `ads`) has none of them. `scripts/gmb.sh` creates or updates the GMB server.
+
 | Tool | What it does |
 | --- | --- |
 | `gbp_list_locations` | Every Business Profile the login manages: name, address, category, phone, website, place ID, Maps and review links, problems |

@@ -54,7 +54,7 @@ audit = logging.getLogger("zyppia.audit")
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 
-INSTRUCTIONS = """\
+ADS_INSTRUCTIONS = """\
 Zyppia's Google Ads connector. It works on every Google Ads account the signed-in
 person can access: client accounts under Zyppia's manager (MCC) account and accounts
 where their login was added directly.
@@ -111,6 +111,15 @@ merchant_list_accounts, merchant_products (approval status and problems), mercha
 merchant_product_override (changes a product without touching the shop's feed). If a tool says the
 sign-in lacks a service, tell the person to reconnect the connector and tick every box. If it says an
 API is turned off, tell them to run the update script or enable it at the link given.
+"""
+
+GMB_INSTRUCTIONS = """\
+Zyppia's Google Business Profile connector: client listings on Google Search and Maps, and free local
+rank tracking. It works on every profile the signed-in person is an Owner or Manager of.
+
+Making changes always takes two steps: a change tool only previews it. Show the person exactly what will
+change, and only after a clear yes call apply_change with the confirm_token. apply_change returns an
+undo_token: undo_change(undo_token) previews reversing it (7 days).
 
 Google Business Profile (the listing on Search and Maps): gbp_list_locations, gbp_profile_audit (0-100
 score and fixes), gbp_reviews, gbp_posts, gbp_insights (views, calls, website clicks, directions, search
@@ -173,7 +182,7 @@ def _user() -> tuple[str, str]:
     tok = get_access_token()
     grt = getattr(tok, "google_refresh_token", None)
     if tok is None or not grt:
-        raise AdsError("Not signed in. Reconnect the Zyppia Google Ads connector in Claude's settings.")
+        raise AdsError("Not signed in. Reconnect this connector in Claude's settings.")
     return tok.subject or "unknown", grt
 
 
@@ -181,9 +190,10 @@ def build_server(settings: Settings) -> FastMCP:
     provider = GoogleBackedOAuthProvider(settings)
     ads = AdsGateway(settings)
 
+    gmb = settings.connector == "gmb"
     mcp = FastMCP(
-        "Zyppia Google Ads",
-        instructions=INSTRUCTIONS,
+        "Zyppia GMB" if gmb else "Zyppia Google Ads",
+        instructions=GMB_INSTRUCTIONS if gmb else ADS_INSTRUCTIONS,
         auth_server_provider=provider,
         auth=AuthSettings(
             issuer_url=settings.public_url,
@@ -211,6 +221,10 @@ def build_server(settings: Settings) -> FastMCP:
         except GoogleAdsException as e:
             log.warning("ads error tool=%s %s", tool, describe_ads_exception(e))
             raise ValueError(describe_ads_exception(e)) from None
+
+    if gmb:
+        _register_gmb_tools(mcp, settings, ads, provider, run)
+        return _finish(mcp, provider, ads)
 
     # ---------------------------------------------------------------- accounts
 
@@ -394,11 +408,6 @@ def build_server(settings: Settings) -> FastMCP:
     register_merchant_tools(mcp, mcp.zyppia_writer, apis)
     register_site_tag_tools(mcp, mcp.zyppia_writer)
 
-    # ---------------------------------------------------------------- phase 6: Business Profile and local rank tracking
-
-    gbp = register_gbp_tools(mcp, mcp.zyppia_writer, apis)
-    register_rank_tools(mcp, mcp.zyppia_writer, settings, gbp)
-
     # ---------------------------------------------------------------- phase 3: audits and planning
 
     @mcp.tool(annotations=READ_ONLY)
@@ -445,8 +454,28 @@ def build_server(settings: Settings) -> FastMCP:
 
         return await run("website_to_campaign_plan", customer_id, go)
 
-    # ---------------------------------------------------------------- plain routes
+    return _finish(mcp, provider, ads)
 
+
+# Tools from register_write_tools that the GMB connector shares with Ads: everything else there is Google Ads only.
+GMB_SHARED_WRITE_TOOLS = ("apply_change", "apply_changes", "undo_change")
+
+
+def _register_gmb_tools(mcp: FastMCP, settings: Settings, ads: AdsGateway, provider, run) -> None:
+    """Business Profile and rank tracking tools, plus apply/undo. No Google Ads tools."""
+    sink = FastMCP("ads-tools-not-exposed")
+    w = register_write_tools(sink, settings, ads, provider.sealer, run)
+    for name in GMB_SHARED_WRITE_TOOLS:
+        t = sink._tool_manager.get_tool(name)
+        mcp.add_tool(t.fn, name=t.name, description=t.description, annotations=t.annotations)
+    mcp.zyppia_writer = w
+    apis = GoogleApis(ads)
+    w.apis = apis
+    gbp = register_gbp_tools(mcp, w, apis)
+    register_rank_tools(mcp, w, settings, gbp)
+
+
+def _finish(mcp: FastMCP, provider, ads: AdsGateway) -> FastMCP:
     @mcp.custom_route("/oauth/google/callback", methods=["GET"])
     async def google_callback(request: Request):
         return await provider.google_callback(request)

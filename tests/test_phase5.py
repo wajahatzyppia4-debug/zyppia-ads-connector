@@ -7,7 +7,7 @@ import pytest
 from app import research
 from app.ads import AdsError
 from app.analytics import Analytics, report_rows
-from app.auth import GOOGLE_SCOPES
+from app.auth import ADS_SCOPES
 from app.google_apis import GoogleApis, explain, raw_change
 from app.merchant import OVERRIDE_SOURCE, Merchant
 from app.search_console import SearchConsole, opportunities
@@ -56,7 +56,7 @@ def env(routes=None):
 
 def test_new_scopes_are_requested():
     for s in ("analytics.edit", "analytics.readonly", "webmasters.readonly", "auth/content"):
-        assert any(s in x for x in GOOGLE_SCOPES)
+        assert any(s in x for x in ADS_SCOPES)
 
 
 def test_explain_gives_plain_fixes():

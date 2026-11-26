@@ -278,11 +278,27 @@ echo DONE
 2. Grid searches are free without limit. Competitor names (up to 15 per scan) and `rank_find_business` come out of
    Google's 5,000 free calls a month, which is roughly 300+ scans a month.
 
-### 6e. Sign in again in Claude
+### 6e. Create the separate Zyppia GMB connector
 
-**Settings**, **Connectors**, **Zyppia Google Ads**: **Disconnect**, then **Connect**, and tick **every** box
-(including Business Profile). Your login must be an **Owner or Manager** of each client's profile
-(business.google.com > the profile > **Business Profile settings** > **People and access**).
+The Business Profile and rank tracker tools live in their own connector, **Zyppia GMB**, so Zyppia Google Ads stays
+exactly as it is. It's a second server running the same code with its own address and sign-in.
+
+1. In Cloud Shell, download and run the script (it only reads the Google Ads server's settings, never changes it):
+
+   ```bash
+   curl -fsSLO https://raw.githubusercontent.com/wajahatzyppia4-debug/zyppia-ads-connector/main/scripts/gmb.sh && bash gmb.sh
+   ```
+
+2. At the end it prints a **redirect URI**. Open <https://console.cloud.google.com/auth/clients>, click your OAuth
+   client, under **Authorized redirect URIs** click **Add URI**, paste it, and click **Save**. Keep the existing
+   Google Ads URI there.
+3. In Claude: **Settings**, **Connectors**, **Add custom connector**. **Name:** `Zyppia GMB`. **URL:** the address
+   ending in `/mcp` that the script printed. Click **Add**, then **Connect**, and tick the **Business Profile**
+   permission. Your login must be an **Owner or Manager** of each client's profile
+   (business.google.com > the profile > **Business Profile settings** > **People and access**).
+
+To update the GMB server later, run `bash update.sh` (it updates both servers) or `bash gmb.sh` again.
+`bash gmb.sh --rollback` takes only the GMB server back a version.
 
 ### Try it
 
@@ -296,7 +312,8 @@ echo DONE
 
 ## Updates
 
-Every time a pull request is merged into `main`, Cloud Run rebuilds and updates the server automatically.
+Every time a pull request is merged into `main`, Cloud Run rebuilds and updates the Google Ads server automatically.
+The separate GMB server updates when you run `bash update.sh` (or `bash gmb.sh`).
 
 To update by hand (or after a failed automatic update), run `bash update.sh` in Cloud Shell. If an update ever
 breaks the connector, `bash update.sh --rollback` goes back to the version before.

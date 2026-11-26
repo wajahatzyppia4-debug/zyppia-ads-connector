@@ -79,6 +79,13 @@ else
   fail "No Cloud Build trigger found. Run this script from inside the zyppia-ads-connector folder instead."
 fi
 gcloud run services update-traffic "$SERVICE" --region "$REGION" --to-latest --quiet >/dev/null
+GMB_SERVICE="${GMB_SERVICE:-zyppia-gmb-connector}"
+if gcloud run services describe "$GMB_SERVICE" --region "$REGION" >/dev/null 2>&1; then
+  echo "Also updating the separate GMB connector to the same build ..."
+  IMG="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+  gcloud run services update "$GMB_SERVICE" --region "$REGION" --image "$IMG" --quiet >/dev/null \
+    || echo "Note: the GMB connector didn't update (Google Ads is fine). Run 'bash gmb.sh' to retry."
+fi
 
 say "3/3 Checking the server answers ..."
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
