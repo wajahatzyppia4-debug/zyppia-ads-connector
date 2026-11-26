@@ -30,12 +30,25 @@ class FakeAds(AdsGateway):
                 return rows, False
         return [], False
 
+    raw_rows = []
+
+    def search_raw(self, grt, acct, query):
+        self.queries.append(query)
+        return list(self.raw_rows)
+
     def mutate(self, grt, acct, operations, validate_only):
         self.calls.append((validate_only, list(operations)))
         resp = self.types().get_type("MutateGoogleAdsResponse")
-        for i, _ in enumerate(operations):
+        for op in operations:
+            kind = op._pb.WhichOneof("operation")
+            inner = getattr(op, kind)
+            verb = inner._pb.WhichOneof("operation")
+            rn = inner.remove if verb == "remove" else getattr(inner, verb).resource_name
+            if verb == "create":
+                head, _, ident = rn.rpartition("/")
+                rn = f"{head}/{100 + abs(int(ident))}" if ident.lstrip("-").isdigit() else rn or "customers/x/new/1"
             r = self.types().get_type("MutateOperationResponse")
-            r.campaign_result.resource_name = f"customers/{acct.customer_id}/campaigns/{1000 + i}"
+            getattr(r, kind.replace("_operation", "_result")).resource_name = rn
             resp.mutate_operation_responses.append(r)
         return resp
 

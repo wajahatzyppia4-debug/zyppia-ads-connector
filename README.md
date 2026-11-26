@@ -39,11 +39,27 @@ confirm token.
 | `advanced_change` | Any other Google Ads API operation (assets, schedules, labels, and so on) |
 | `apply_change` | Make a previewed change |
 
+### Phase 3
+
+| Tool | What it does |
+| --- | --- |
+| `account_health_check` | Audits an account and returns a 0-100 score plus ranked issues: tracking, budget-limited campaigns, wasted search terms, low Quality Score, disapproved or weak ads, ad groups with no ads, missing extensions, Display network on Search. Each issue names the change tool that fixes it |
+| `website_to_campaign_plan` | Reads a client's website (public addresses only) and gets Keyword Planner ideas for it, so Claude can draft a full campaign |
+| `add_sitelinks` / `add_callouts` / `add_call_button` / `add_structured_snippet` | Extensions for a campaign or the whole account |
+| `set_ad_schedule` | When ads run, with optional bid changes by time |
+| `set_bid_adjustments` | Bid more or less by device or targeted location |
+| `undo_change` | Reverse an applied change within 7 days (changed values go back, created items are removed) |
+| `apply_changes` | Apply several previews after one yes, e.g. the same fix across many accounts |
+
 Safety rules:
 
 - Confirm tokens expire after 15 minutes, work once, and only for the person who made the preview.
 - These need an extra, explicit yes (`confirm_large_change`): budget or bid increases over
   `MAX_INCREASE_PCT` (default 50%), turning anything on, removals, removing every location, and `advanced_change`.
+- People in `READ_ONLY_EMAILS` can use reports but can't change anything.
+- `SPEND_LIMITS` (for example `399-355-6480=100`) caps an account's total daily budget across running campaigns.
+  Changes that would go over are refused.
+- Removals can't be undone, so the undo token doesn't cover them.
 - Every preview and applied change is logged to Cloud Logging (`zyppia.audit`) with the user and the details.
 
 ## How it works

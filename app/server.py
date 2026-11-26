@@ -24,9 +24,12 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from .ads import AdsError, AdsGateway, describe_ads_exception, error_codes, pretty_id
+from .ads import AdsError, AdsGateway, describe_ads_exception, pretty_id
 from .auth import GoogleBackedOAuthProvider
 from .config import Settings, load_settings
+from . import research
+from .assets import register_extra_tools
+from .health import HealthCheck
 from .writes import register_write_tools
 
 log = logging.getLogger("zyppia")
@@ -51,6 +54,12 @@ Making changes always takes two steps:
    Only after a clear yes, call apply_change with the confirm_token. If the preview
    lists needs_extra_confirmation, name those items and get an explicit yes before
    passing confirm_large_change=true. Never apply a change the person hasn't seen.
+
+apply_change returns an undo_token: undo_change(undo_token) previews reversing it (7 days).
+For the same change across several accounts, preview each, get one yes, then use apply_changes.
+
+For "how is this account doing" or "what should we fix", run account_health_check. To build
+a campaign from a client's site, start with website_to_campaign_plan.
 
 New campaigns are created PAUSED. Prefer pausing over removing. IDs for ads and
 keywords are 'adGroupId~id' (both are columns in performance_report rows).
@@ -78,7 +87,7 @@ LEVELS = {
         "keyword_view",
         ["campaign.id", "campaign.name", "ad_group.id", "ad_group.name", "ad_group_criterion.criterion_id",
          "ad_group_criterion.keyword.text", "ad_group_criterion.keyword.match_type", "ad_group_criterion.status",
-         "ad_group_criterion.effective_cpc_bid_micros"],
+         "ad_group_criterion.effective_cpc_bid_micros", "ad_group_criterion.quality_info.quality_score"],
         "ad_group_criterion.status != 'REMOVED'",
     ),
     "search_term": (
@@ -299,50 +308,8 @@ def build_server(settings: Settings) -> FastMCP:
 
         def go(user, grt):
             acct = ads.account(user, grt, customer_id)
-            client = ads.client(grt, acct.login_customer_id)
-            svc = client.get_service("KeywordPlanIdeaService")
-            req = client.get_type("GenerateKeywordIdeasRequest")
-            req.customer_id = acct.customer_id
-            req.language = f"languageConstants/{int(language_id)}"
-            for loc in location_ids or []:
-                req.geo_target_constants.append(f"geoTargetConstants/{int(loc)}")
-            req.include_adult_keywords = False
-            net = client.enums.KeywordPlanNetworkEnum
-            req.keyword_plan_network = net.GOOGLE_SEARCH_AND_PARTNERS if include_search_partners else net.GOOGLE_SEARCH
-            seeds = (seed_keywords or [])[:20]
-            if seeds and page_url:
-                req.keyword_and_url_seed.url = page_url
-                req.keyword_and_url_seed.keywords.extend(seeds)
-            elif seeds:
-                req.keyword_seed.keywords.extend(seeds)
-            else:
-                req.url_seed.url = page_url
-            try:
-                ideas = []
-                for idea in svc.generate_keyword_ideas(request=req):
-                    m = idea.keyword_idea_metrics
-                    ideas.append({
-                        "keyword": idea.text,
-                        "avg_monthly_searches": m.avg_monthly_searches,
-                        "competition": m.competition.name,
-                        "competition_index": m.competition_index,
-                        "top_of_page_bid_low": round(m.low_top_of_page_bid_micros / 1e6, 2),
-                        "top_of_page_bid_high": round(m.high_top_of_page_bid_micros / 1e6, 2),
-                    })
-                    if len(ideas) >= max_ideas:
-                        break
-            except GoogleAdsException as e:
-                codes = error_codes(e)
-                if any(c.startswith(("authorization_error.", "access_level_error.")) or "DEVELOPER_TOKEN" in c for c in codes) or (
-                    "access" in describe_ads_exception(e).lower() and "level" in describe_ads_exception(e).lower()
-                ):
-                    raise AdsError(
-                        "Keyword Planner isn't available yet: it needs Basic API access, and this connector's "
-                        "Google Cloud project is on Explorer access. Finish brand verification in Google Cloud, "
-                        "then re-apply for Basic. Details: " + describe_ads_exception(e)
-                    ) from None
-                raise
-            ideas.sort(key=lambda d: d["avg_monthly_searches"] or 0, reverse=True)
+            ideas = research.keyword_ideas(ads, grt, acct, seed_keywords, page_url, location_ids, language_id,
+                                           include_search_partners, max_ideas)
             return {"account": acct.name, "currency": acct.currency, "count": len(ideas), "ideas": ideas}
 
         return await run("keyword_ideas", customer_id, go)
@@ -350,6 +317,53 @@ def build_server(settings: Settings) -> FastMCP:
     # ---------------------------------------------------------------- changes (phase 2)
 
     mcp.zyppia_writer = register_write_tools(mcp, settings, ads, provider.sealer, run)
+    register_extra_tools(mcp, mcp.zyppia_writer)
+
+    # ---------------------------------------------------------------- phase 3: audits and planning
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def account_health_check(
+        customer_id: Annotated[str, Field(description="Client account ID, e.g. 399-355-6480")],
+        days: Annotated[int, Field(ge=7, le=90, description="How many days of data to check.")] = 30,
+    ) -> dict[str, Any]:
+        """Audit one account: conversion tracking, budget-limited campaigns, search terms that cost money
+        without converting, low Quality Score keywords, disapproved or weak ads, ad groups with no ads,
+        missing sitelinks/callouts/calls and risky settings. Returns a 0-100 score and issues ranked by
+        severity, each with the change tool and arguments that would fix it (as a preview)."""
+        return await run("account_health_check", customer_id,
+                         lambda user, grt: HealthCheck(ads, grt, ads.account(user, grt, customer_id), days).run())
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def website_to_campaign_plan(
+        customer_id: Annotated[str, Field(description="The client account the campaign is for.")],
+        url: Annotated[str, Field(description="The client's website or landing page, https://...")],
+        location_ids: Annotated[list[str] | None, Field(description="Location IDs from find_locations.")] = None,
+        language_id: str = "1000",
+        max_ideas: Annotated[int, Field(ge=10, le=500)] = 150,
+    ) -> dict[str, Any]:
+        """Read a client's website and gather what's needed to plan a Search campaign: page title, headings,
+        text, phone numbers, other pages, and Keyword Planner ideas for the site (when Basic API access is on).
+        Use the result to draft ad groups by theme, keywords, ad text, sitelinks and callouts; show the plan to the
+        person, then build it with create_search_campaign (created paused) and the other change tools."""
+
+        def go(user, grt):
+            acct = ads.account(user, grt, customer_id)
+            page = research.fetch_page(url)
+            out: dict[str, Any] = {"account": acct.name, "currency": acct.currency, "website": page}
+            try:
+                out["keyword_ideas"] = research.keyword_ideas(ads, grt, acct, None, page["url"], location_ids,
+                                                              language_id, False, max_ideas)
+            except AdsError as e:
+                out["keyword_ideas"] = []
+                out["keyword_ideas_note"] = str(e) + " Until then, suggest keywords from the website text instead."
+            out["next_step"] = (
+                "Draft a plan: 2-6 ad groups by service/theme, 5-20 keywords each (phrase and exact), one responsive "
+                "search ad per group using words from the site (headlines max 30 chars, descriptions max 90), "
+                "4 sitelinks from pages_on_site, 4 callouts, and a daily budget. Show it to the person before creating."
+            )
+            return out
+
+        return await run("website_to_campaign_plan", customer_id, go)
 
     # ---------------------------------------------------------------- plain routes
 
