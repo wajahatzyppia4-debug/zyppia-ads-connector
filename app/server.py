@@ -31,9 +31,12 @@ from .auth import GoogleBackedOAuthProvider
 from .config import Settings, load_settings
 from . import research
 from .assets import register_extra_tools
+from .audiences import register_audience_tools
 from .conversions import register_conversion_tools
+from .display import register_display_tools
 from .gtm import register_gtm_tools
 from .health import HealthCheck
+from .pmax import register_pmax_tools
 from .writes import register_write_tools
 
 log = logging.getLogger("zyppia")
@@ -76,6 +79,16 @@ To track a new website conversion end to end (Google Ads conversion action + GTM
 tag, Conversion Linker), use setup_conversion_tracking. Tag Manager changes use the same
 preview -> apply_change -> undo_change steps. If a Tag Manager tool says the sign-in lacks
 Tag Manager access, tell the person to reconnect the connector and tick the Tag Manager boxes.
+
+Other campaign types: create_pmax_campaign (Performance Max: one campaign on Search, YouTube,
+Display, Gmail, Discover and Maps from headlines, descriptions, images, logos and videos; add a
+merchant_center_id for Shopping products), then list_asset_groups, create_asset_group,
+update_asset_group, set_pmax_signals and set_pmax_listing_groups. create_display_campaign and
+create_responsive_display_ad make image ads on websites and apps; update_display_targeting changes
+who sees them. Remarketing: list_audiences, create_remarketing_list (website visitors), then
+create_remarketing_campaign, update_audience_targeting (Search or Display), or a PMax audience
+signal. find_audience_segments finds interest, in-market, topic and custom audience IDs. Images
+are public https addresses (or existing image asset IDs); if the person has none, ask for them.
 """
 
 DATE_PRESETS = Literal[
@@ -336,6 +349,10 @@ def build_server(settings: Settings) -> FastMCP:
 
     conv = register_conversion_tools(mcp, mcp.zyppia_writer)
     mcp.zyppia_gtm = register_gtm_tools(mcp, mcp.zyppia_writer, conv)
+    # Phase 5: Performance Max, Display and remarketing.
+    audiences = register_audience_tools(mcp, mcp.zyppia_writer)
+    register_display_tools(mcp, mcp.zyppia_writer, audiences)
+    register_pmax_tools(mcp, mcp.zyppia_writer, audiences)
 
     # ---------------------------------------------------------------- phase 3: audits and planning
 

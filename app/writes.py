@@ -261,6 +261,9 @@ class Writer:
             raise AdsError("There's nothing to change.")
         if ch.ops:
             self.ads.mutate(grt, ch.acct, ch.ops, validate_only=True)  # raises if Google would reject it
+        for i, _url, _sha in (ch.extra or {}).get("img", []):
+            # Image bytes are too big for a token: keep the address + fingerprint, download again on apply.
+            ch.ops[i].asset_operation.create.image_asset.data = b""
         MO = type(self.op())
         cid = ch.acct.customer_id if ch.acct else None
         payload = {
@@ -323,6 +326,11 @@ class Writer:
             raise AdsError("This change was already applied. Preview it again if you want to repeat it.")
         MO = type(self.op())
         ops = [MO.deserialize(base64.b64decode(o)) for o in data["o"]]
+        try:
+            self.fill_images(ops, (data.get("x") or {}).get("img", []))
+        except Exception:
+            self.used.release(token)
+            raise
         results: list[str] = []
         created: list[str] = []
         undo_ops: list[Any] = []
@@ -391,6 +399,19 @@ class Writer:
             out["cannot_undo"] = sorted(not_undoable)
         return out
 
+    def image_bytes(self, url: str) -> bytes:
+        from .media import fetch_image  # late import: media imports research, which imports ads
+
+        return fetch_image(url)
+
+    def fill_images(self, ops: list[Any], images: list[list[Any]]) -> None:
+        """Put back the images left out of the confirm token, checking each is the one previewed."""
+        for i, url, sha in images:
+            data = self.image_bytes(url)
+            if hashlib.sha256(data).hexdigest() != sha:
+                raise AdsError(f"The image at {url} changed since the preview. Preview the change again.")
+            ops[i].asset_operation.create.image_asset.data = data
+
     def new_conversion_ids(self, grt: str, acct: Account | None, created: list[str]) -> dict[str, str]:
         """Conversion ID and label of a conversion action this change just created (for its Tag Manager tag)."""
         rn = next((r for r in created if "/conversionActions/" in r), None)
@@ -412,6 +433,7 @@ class Writer:
         "campaign_operation": "campaign", "ad_group_operation": "ad_group", "ad_group_ad_operation": "ad_group_ad",
         "ad_group_criterion_operation": "ad_group_criterion", "campaign_budget_operation": "campaign_budget",
         "campaign_criterion_operation": "campaign_criterion", "conversion_action_operation": "conversion_action",
+        "asset_group_operation": "asset_group", "user_list_operation": "user_list",
     }
     _REMOVABLE = {
         "campaigns": "campaign_operation", "campaignBudgets": "campaign_budget_operation",
@@ -419,7 +441,13 @@ class Writer:
         "adGroupCriteria": "ad_group_criterion_operation", "campaignCriteria": "campaign_criterion_operation",
         "campaignAssets": "campaign_asset_operation", "customerAssets": "customer_asset_operation",
         "adGroupAssets": "ad_group_asset_operation", "conversionActions": "conversion_action_operation",
+        "assetGroups": "asset_group_operation", "assetGroupAssets": "asset_group_asset_operation",
+        "assetGroupSignals": "asset_group_signal_operation", "userLists": "user_list_operation",
     }
+    _UNDER_CAMPAIGN = ("adGroups", "adGroupAds", "adGroupCriteria", "campaignCriteria", "campaignAssets", "adGroupAssets",
+                       "assetGroups", "assetGroupAssets", "assetGroupSignals", "assetGroupListingGroupFilters")
+    _UNDER_GROUP = ("adGroupAds", "adGroupCriteria", "adGroupAssets")
+    _UNDER_ASSET_GROUP = ("assetGroupAssets", "assetGroupSignals", "assetGroupListingGroupFilters")
 
     def inverse_updates(self, grt: str, acct: Account, ops: list[Any]) -> tuple[list[Any], set[str]]:
         """Read the current values of everything an update will change, and build updates that put them back."""
@@ -467,16 +495,20 @@ class Writer:
         kinds = [(rn.split("/")[2], rn) for rn in created if len(rn.split("/")) >= 4]
         made_campaign = any(k == "campaigns" for k, _ in kinds)
         made_groups = {rn.split("/")[3] for k, rn in kinds if k == "adGroups"}
+        made_asset_groups = {rn.split("/")[3] for k, rn in kinds if k == "assetGroups"}
         out = []
-        order = ["campaigns", "adGroups", "adGroupAds", "adGroupCriteria", "campaignCriteria",
-                 "campaignAssets", "adGroupAssets", "customerAssets", "campaignBudgets", "conversionActions"]
+        order = ["campaigns", "assetGroups", "adGroups", "adGroupAds", "adGroupCriteria", "campaignCriteria",
+                 "campaignAssets", "adGroupAssets", "assetGroupAssets", "assetGroupSignals", "customerAssets",
+                 "campaignBudgets", "conversionActions", "userLists"]
         for kind in order:
             for k, rn in kinds:
                 if k != kind or k not in self._REMOVABLE:
                     continue
-                if made_campaign and k in ("adGroups", "adGroupAds", "adGroupCriteria", "campaignCriteria", "campaignAssets", "adGroupAssets"):
+                if made_campaign and k in self._UNDER_CAMPAIGN:
                     continue
-                if k in ("adGroupAds", "adGroupCriteria", "adGroupAssets") and rn.split("/")[3].split("~")[0] in made_groups:
+                if k in self._UNDER_GROUP and rn.split("/")[3].split("~")[0] in made_groups:
+                    continue
+                if k in self._UNDER_ASSET_GROUP and rn.split("/")[3].split("~")[0] in made_asset_groups:
                     continue
                 op = self.op()
                 getattr(op, self._REMOVABLE[k]).remove = rn
@@ -890,6 +922,35 @@ class Writer:
             ch.ops.append(op)
             ch.lines.append(l2)
 
+    def geo_lang_ops(self, ch: Change, camp_rn: str, a: dict[str, Any]) -> None:
+        """Target locations, excluded locations and languages of a new campaign."""
+        locs = [str(_num(x, "location ID")) for x in a.get("location_ids") or []]
+        for loc in locs:
+            op = self.op()
+            cc = op.campaign_criterion_operation.create
+            cc.campaign = camp_rn
+            cc.location.geo_target_constant = f"geoTargetConstants/{loc}"
+            ch.ops.append(op)
+        for loc in a.get("excluded_location_ids") or []:
+            op = self.op()
+            cc = op.campaign_criterion_operation.create
+            cc.campaign = camp_rn
+            cc.negative = True
+            cc.location.geo_target_constant = f"geoTargetConstants/{_num(loc, 'location ID')}"
+            ch.ops.append(op)
+        ch.lines.append(f"locations: {', '.join(locs) if locs else 'ALL COUNTRIES (no location set)'}"
+                        + (" (people in or regularly in these places)" if locs else ""))
+        if not locs:
+            ch.warnings.append("No locations set, so ads could show worldwide. Use find_locations to get IDs.")
+        langs = [str(_num(x, "language ID")) for x in a.get("language_ids") or ["1000"]]
+        for lang in langs:
+            op = self.op()
+            cc = op.campaign_criterion_operation.create
+            cc.campaign = camp_rn
+            cc.language.language_constant = f"languageConstants/{lang}"
+            ch.ops.append(op)
+        ch.lines.append(f"languages: {', '.join(langs)}")
+
     def new_campaign(self, grt: str, acct: Account, a: dict[str, Any]) -> Change:
         e = self.t.enums
         name = (a.get("name") or "").strip()
@@ -939,32 +1000,7 @@ class Writer:
         if a.get("end_date"):
             ch.lines.append(f"ends {a['end_date']}")
 
-        locs = [str(_num(x, "location ID")) for x in a.get("location_ids") or []]
-        for loc in locs:
-            op = self.op()
-            cc = op.campaign_criterion_operation.create
-            cc.campaign = camp_rn
-            cc.location.geo_target_constant = f"geoTargetConstants/{loc}"
-            ch.ops.append(op)
-        for loc in a.get("excluded_location_ids") or []:
-            op = self.op()
-            cc = op.campaign_criterion_operation.create
-            cc.campaign = camp_rn
-            cc.negative = True
-            cc.location.geo_target_constant = f"geoTargetConstants/{_num(loc, 'location ID')}"
-            ch.ops.append(op)
-        ch.lines.append(f"locations: {', '.join(locs) if locs else 'ALL COUNTRIES (no location set)'}"
-                        + (" (people in or regularly in these places)" if locs else ""))
-        if not locs:
-            ch.warnings.append("No locations set, so ads could show worldwide. Use find_locations to get IDs.")
-        langs = [str(_num(x, "language ID")) for x in a.get("language_ids") or ["1000"]]
-        for lang in langs:
-            op = self.op()
-            cc = op.campaign_criterion_operation.create
-            cc.campaign = camp_rn
-            cc.language.language_constant = f"languageConstants/{lang}"
-            ch.ops.append(op)
-        ch.lines.append(f"languages: {', '.join(langs)}")
+        self.geo_lang_ops(ch, camp_rn, a)
 
         if a.get("ad_group_name"):
             self._ad_group_ops(ch, acct, camp_rn, self.rn(acct, "adGroups", -3), a["ad_group_name"],
