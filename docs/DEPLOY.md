@@ -111,7 +111,7 @@ If it says "project not set", run `gcloud config set project YOUR-PROJECT-ID`
 
 7. Click **Create**. Building takes 3 to 6 minutes.
 8. When it's done, the page shows a **URL** at the top. Check that it's the same address as in Step 2.
-   Open that URL with `/healthz` added to the end. You should see `{"ok":true}`.
+   Open that URL with `/.well-known/oauth-authorization-server` added to the end. You should see text starting with `{"issuer"`.
 
 ---
 

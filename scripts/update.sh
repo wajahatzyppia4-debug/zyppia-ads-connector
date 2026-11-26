@@ -90,11 +90,11 @@ fi
 say "3/3 Checking the server answers ..."
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
 for i in 1 2 3 4 5 6; do
-  if curl -fsS "$URL/healthz" | grep -q '"ok"'; then
+  if curl -fsS "$URL/.well-known/oauth-authorization-server" | grep -q authorization_endpoint; then
     say "DONE. The connector is updated and working: $URL/mcp"
     echo "If new Google permissions were added, reconnect the connector in Claude (Settings > Connectors)."
     exit 0
   fi
   sleep 10
 done
-fail "The server didn't answer at $URL/healthz. Run 'bash update.sh --rollback' to go back to the earlier version."
+fail "The server didn't answer at $URL/.well-known/oauth-authorization-server. Run 'bash update.sh --rollback' to go back to the earlier version."
