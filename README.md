@@ -73,7 +73,7 @@ workspace and reach the website only when it's published, which always needs ext
 deleting, custom HTML/JavaScript and raw API calls are flagged. If the Google Ads part of a combined change works
 and a Tag Manager step fails, the result says "partly done" and the undo token reverses what was made.
 
-### Phase 5: Performance Max, Display and remarketing
+### Phase 5B: Performance Max, Display and remarketing
 
 | Tool | What it does |
 | --- | --- |
@@ -99,6 +99,31 @@ Things to set up by hand: a Merchant Center account linked to the Google Ads acc
 Performance Max), the Google tag on the website (so remarketing lists fill up), and working conversion tracking
 (Performance Max and conversion bidding need it). Remarketing lists only work once they have 100+ active people for
 Display and Performance Max, or 1,000+ for Search.
+### Phase 5: Google Analytics, website tags, Search Console, Merchant Center
+
+| Tool | What it does |
+| --- | --- |
+| `ga4_list_properties` / `ga4_property` | GA4 accounts and properties; one property's web streams (G-... IDs), key events, Google Ads links and what's missing |
+| `ga4_report` | Any GA4 metrics by any dimensions for a date range |
+| `ga4_check_event` | Live: which events arrived in the last 30 minutes (did the test conversion arrive?) |
+| `ga4_create_property` | New property plus its web data stream (undo deletes it; GA4 keeps it in the trash 35 days) |
+| `ga4_key_event` | Mark an event as a key event (conversion) or remove one |
+| `ga4_link_google_ads` | Link or unlink a GA4 property and a Google Ads account |
+| `ga4_advanced_change` | Any other GA4 Admin API call (extra confirmation) |
+| `tag_install_code` | The exact Tag Manager / Google tag code, where to paste it (WordPress, Shopify, Wix, ...) and a message for the developer |
+| `check_site_tags` | Reads a live site: which GTM-, G- and AW- tags are there, doubled tags (also code that duplicates a tag inside the site's GTM container), missing IDs, old Universal Analytics, consent mode, platform |
+| `gsc_list_sites` / `gsc_search_queries` | Real Google searches bringing visitors (by query, page, country, device, date), compared with the period before, plus keyword opportunities |
+| `gsc_inspect_url` / `gsc_sitemaps` | Is a page on Google; submitted sitemaps and errors |
+| `merchant_list_accounts` / `merchant_products` | Merchant Center accounts; products with approval status, problems and Google's fixes |
+| `merchant_report` | Product clicks, impressions and conversions (or any Merchant report query) |
+| `merchant_product_override` | Change a product's title, price, availability, labels, pause its ads... through a "Zyppia overrides" supplemental data source, so the shop's feed is untouched. Undo removes the override |
+| `merchant_register_project` / `merchant_advanced_change` | One-time Merchant API registration; any other Merchant API call (extra confirmation) |
+
+These APIs also have no "check only" mode, so (like Tag Manager) previews are checked by the connector and the exact
+API calls are sealed into the confirm token. Search Console is read-only.
+
+`scripts/update.sh` (run in Cloud Shell) turns on every Google API the connector needs, rebuilds the server from
+`main`, and checks it answers. `--rollback` goes back to the previous version.
 
 Safety rules:
 

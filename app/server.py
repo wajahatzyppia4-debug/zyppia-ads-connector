@@ -4,6 +4,8 @@ Phase 1: accounts, reports (GAQL), keyword ideas, change history (read-only).
 Phase 2: changes, always previewed first and applied with apply_change (see writes.py).
 Phase 3: health check, extensions, undo (assets.py, health.py).
 Phase 4: conversion actions and Google Tag Manager (conversions.py, gtm.py).
+Phase 5: Google Analytics 4, Search Console, Merchant Center and website tag checks
+(analytics.py, search_console.py, merchant.py, sitetags.py, google_apis.py).
 """
 
 from __future__ import annotations
@@ -35,6 +37,11 @@ from .audiences import register_audience_tools
 from .conversions import register_conversion_tools
 from .display import register_display_tools
 from .gtm import register_gtm_tools
+from .analytics import register_analytics_tools
+from .google_apis import GoogleApis
+from .merchant import register_merchant_tools
+from .search_console import register_search_console_tools
+from .sitetags import register_site_tag_tools
 from .health import HealthCheck
 from .pmax import register_pmax_tools
 from .writes import register_write_tools
@@ -89,6 +96,18 @@ who sees them. Remarketing: list_audiences, create_remarketing_list (website vis
 create_remarketing_campaign, update_audience_targeting (Search or Display), or a PMax audience
 signal. find_audience_segments finds interest, in-market, topic and custom audience IDs. Images
 are public https addresses (or existing image asset IDs); if the person has none, ask for them.
+
+Google Analytics 4: ga4_list_properties, ga4_property (streams, G- IDs, key events, Ads links),
+ga4_report, ga4_check_event (live: did a test conversion arrive?). ga4_create_property,
+ga4_key_event and ga4_link_google_ads change setup (preview -> apply_change, like everything else).
+Website tags: tag_install_code makes the code for a developer; check_site_tags reads a live site and
+finds missing or doubled tags. Search Console: gsc_list_sites, gsc_search_queries (the real searches
+bringing visitors, with keyword opportunities; use it for keyword research while Keyword Planner
+needs Basic access), gsc_inspect_url, gsc_sitemaps. Merchant Center (online shops):
+merchant_list_accounts, merchant_products (approval status and problems), merchant_report,
+merchant_product_override (changes a product without touching the shop's feed). If a tool says the
+sign-in lacks a service, tell the person to reconnect the connector and tick every box. If it says an
+API is turned off, tell them to run the update script or enable it at the link given.
 """
 
 DATE_PRESETS = Literal[
@@ -353,6 +372,15 @@ def build_server(settings: Settings) -> FastMCP:
     audiences = register_audience_tools(mcp, mcp.zyppia_writer)
     register_display_tools(mcp, mcp.zyppia_writer, audiences)
     register_pmax_tools(mcp, mcp.zyppia_writer, audiences)
+
+    # ---------------------------------------------------------------- phase 5: Analytics, Search Console, Merchant, site tags
+
+    apis = GoogleApis(ads)
+    mcp.zyppia_writer.apis = apis
+    register_analytics_tools(mcp, mcp.zyppia_writer, apis)
+    register_search_console_tools(mcp, mcp.zyppia_writer, apis)
+    register_merchant_tools(mcp, mcp.zyppia_writer, apis)
+    register_site_tag_tools(mcp, mcp.zyppia_writer)
 
     # ---------------------------------------------------------------- phase 3: audits and planning
 

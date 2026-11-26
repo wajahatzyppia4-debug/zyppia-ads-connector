@@ -52,7 +52,15 @@ TAGMANAGER_SCOPES = [
     "https://www.googleapis.com/auth/tagmanager.edit.containerversions",
     "https://www.googleapis.com/auth/tagmanager.publish",
 ]
-GOOGLE_SCOPES = ["openid", "email", ADWORDS_SCOPE, *TAGMANAGER_SCOPES]
+# Phase 5, also optional: Google Analytics (setup + reports), Search Console (read only), Merchant Center.
+ANALYTICS_SCOPES = [
+    "https://www.googleapis.com/auth/analytics.edit",
+    "https://www.googleapis.com/auth/analytics.readonly",
+]
+SEARCH_CONSOLE_SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
+MERCHANT_SCOPES = ["https://www.googleapis.com/auth/content"]
+GOOGLE_SCOPES = ["openid", "email", ADWORDS_SCOPE, *TAGMANAGER_SCOPES, *ANALYTICS_SCOPES, *SEARCH_CONSOLE_SCOPES,
+                 *MERCHANT_SCOPES]
 
 CODE_TTL = 300
 STATE_TTL = 900

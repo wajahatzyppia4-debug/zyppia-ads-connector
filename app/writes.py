@@ -202,6 +202,14 @@ class Writer:
         self.used = _Used()
         self.run = None  # set by register_write_tools
         self.gtm = None  # Tag Manager gateway (gtm.GtmGateway), set by register_gtm_tools
+        self.apis = None  # Analytics / Search Console / Merchant Center (google_apis.GoogleApis), phase 5
+
+    def step_runner(self, steps: list[dict[str, Any]]):
+        """Steps with an 'a' (API) key are phase 5 Google API steps; the rest are Tag Manager steps."""
+        runner = self.apis if any(st.get("a") for st in steps) else self.gtm
+        if runner is None:
+            raise AdsError("That Google service isn't set up on this server.")
+        return runner
 
     def prepared(self, tool: str, customer_id: str, build):
         """Run a preview tool: look up the account, build the Change, preview it."""
@@ -284,6 +292,8 @@ class Writer:
                                "operations": len(ch.ops), "tag_manager_steps": len(ch.gtm), "large": ch.large}))
         if ch.ops:
             status = "preview_ok (Google checked it, nothing changed yet)"
+        elif any(st.get("a") for st in ch.gtm):
+            status = "preview_ok (checked by the connector; this Google service has no test mode, so nothing changed yet)"
         else:
             status = "preview_ok (checked by the connector; Tag Manager has no test mode, so nothing changed yet)"
         out = {
@@ -320,8 +330,7 @@ class Writer:
             )
         acct = self.ads.account(user, grt, data["c"]) if data.get("c") else None
         steps = data.get("g") or []
-        if steps and self.gtm is None:
-            raise AdsError("Tag Manager isn't set up on this server.")
+        runner = self.step_runner(steps) if steps else None
         if not self.used.claim(token):
             raise AdsError("This change was already applied. Preview it again if you want to repeat it.")
         MO = type(self.op())
@@ -363,7 +372,7 @@ class Writer:
             try:
                 if (data.get("x") or {}).get("label"):
                     ctx.update(self.new_conversion_ids(grt, acct, created))
-                gtm_results, gtm_undo, notes = self.gtm.execute(grt, steps, ctx)
+                gtm_results, gtm_undo, notes = runner.execute(grt, steps, ctx)
                 results += gtm_results
                 not_undoable |= notes
             except PartialChange as e:
@@ -386,7 +395,7 @@ class Writer:
             "changed": results,
         }
         if gtm_error:
-            out["error"] = ("Some of this was made, then Tag Manager stopped: " + gtm_error
+            out["error"] = ("Some of this was made, then Google stopped: " + gtm_error
                             + " Tell the person what was done and what wasn't. The undo token reverses the part that was made.")
         if undo_ops or gtm_undo:
             out["undo_token"] = self.sealer.seal("undo", {
@@ -527,7 +536,7 @@ class Writer:
         ch.ops = [MO.deserialize(base64.b64decode(o)) for o in data["o"]]
         ch.gtm = data.get("g") or []
         ch.lines = ["reverse: " + line for line in data["s"]]
-        ch.lines += [f"Tag Manager: {st['d']}" for st in ch.gtm]
+        ch.lines += [(st["d"] if st.get("a") else f"Tag Manager: {st['d']}") for st in ch.gtm]
         if any(st.get("k") == "publish" for st in ch.gtm):
             ch.large.append("this republishes the earlier Tag Manager version, which changes the live website")
         for op in ch.ops:
@@ -538,7 +547,7 @@ class Writer:
                 ch.large.append("undoing this turns something back on, which can start spending money")
                 break
         ch.warnings.append("Anything changed by hand since then is overwritten.")
-        if ch.gtm and not any(st.get("k") == "publish" for st in ch.gtm):
+        if ch.gtm and not any(st.get("a") for st in ch.gtm) and not any(st.get("k") == "publish" for st in ch.gtm):
             ch.warnings.append("Tag Manager undo changes the workspace. If the earlier change was published, "
                                "publish again (gtm_publish) for the website to change back.")
         return self.preview(user, grt, ch)
