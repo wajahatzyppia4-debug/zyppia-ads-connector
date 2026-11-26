@@ -52,6 +52,8 @@ class Settings:
 
     # Google Maps Platform API key for the free local rank tracker (Places API (New) only). Optional.
     places_api_key: str | None = None
+    # Which connector this server is: "ads" (Zyppia Google Ads) or "gmb" (Zyppia GMB: Business Profile + rank tracking).
+    connector: str = "ads"
 
     access_token_ttl: int = 3600
     refresh_token_ttl: int = 60 * 60 * 24 * 30
@@ -112,4 +114,12 @@ def load_settings() -> Settings:
         read_only_emails=_csv(os.environ.get("READ_ONLY_EMAILS")),
         spend_limits=_limits(os.environ.get("SPEND_LIMITS")),
         places_api_key=os.environ.get("PLACES_API_KEY") or None,
+        connector=_connector(os.environ.get("CONNECTOR")),
     )
+
+
+def _connector(value: str | None) -> str:
+    v = (value or "ads").strip().lower()
+    if v not in ("ads", "gmb"):
+        raise RuntimeError(f"CONNECTOR must be 'ads' or 'gmb', not {value!r}")
+    return v

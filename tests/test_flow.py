@@ -49,7 +49,8 @@ def fresh_app(server):
     return server.streamable_http_app()
 
 
-async def sign_in(server, email, scope="openid email https://www.googleapis.com/auth/adwords"):
+async def sign_in(server, email, scope="openid email https://www.googleapis.com/auth/adwords",
+                  asks="https://www.googleapis.com/auth/adwords"):
     provider = server.zyppia_provider
 
     async def fake_exchange(code):
@@ -85,7 +86,7 @@ async def sign_in(server, email, scope="openid email https://www.googleapis.com/
             google = urlparse(auth.headers["location"])
             assert google.netloc == "accounts.google.com"
             gq = parse_qs(google.query)
-            assert "https://www.googleapis.com/auth/adwords" in gq["scope"][0]
+            assert asks in gq["scope"][0].split()
             assert gq["redirect_uri"][0] == BASE + "/oauth/google/callback"
 
             cb = await c.get("/oauth/google/callback", params={"code": "g-code", "state": gq["state"][0]})

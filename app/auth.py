@@ -61,8 +61,15 @@ SEARCH_CONSOLE_SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
 MERCHANT_SCOPES = ["https://www.googleapis.com/auth/content"]
 # Phase 6, optional: Google Business Profile (locations, reviews, posts, photos, insights).
 BUSINESS_PROFILE_SCOPES = ["https://www.googleapis.com/auth/business.manage"]
-GOOGLE_SCOPES = ["openid", "email", ADWORDS_SCOPE, *TAGMANAGER_SCOPES, *ANALYTICS_SCOPES, *SEARCH_CONSOLE_SCOPES,
-                 *MERCHANT_SCOPES, *BUSINESS_PROFILE_SCOPES]
+ADS_SCOPES = ["openid", "email", ADWORDS_SCOPE, *TAGMANAGER_SCOPES, *ANALYTICS_SCOPES, *SEARCH_CONSOLE_SCOPES,
+              *MERCHANT_SCOPES]
+GMB_SCOPES = ["openid", "email", *BUSINESS_PROFILE_SCOPES]
+# Per connector: the scopes asked for at sign-in, and the one that must be granted.
+CONNECTOR_SCOPES = {
+    "ads": (ADS_SCOPES, ADWORDS_SCOPE, "Google Ads access not granted", "Please tick the Google Ads permission"),
+    "gmb": (GMB_SCOPES, BUSINESS_PROFILE_SCOPES[0], "Business Profile access not granted",
+            "Please tick the Business Profile permission"),
+}
 
 CODE_TTL = 300
 STATE_TTL = 900
@@ -154,7 +161,7 @@ class GoogleBackedOAuthProvider:
             "client_id": self.settings.google_client_id,
             "redirect_uri": self.settings.google_redirect_uri,
             "response_type": "code",
-            "scope": " ".join(GOOGLE_SCOPES),
+            "scope": " ".join(CONNECTOR_SCOPES[self.settings.connector][0]),
             "access_type": "offline",
             "prompt": "consent select_account",
             "include_granted_scopes": "true",
@@ -199,8 +206,9 @@ class GoogleBackedOAuthProvider:
                 f"{email or 'This account'} is not on Zyppia's allowed list for this connector. Ask an admin to add it.",
                 403,
             )
-        if ADWORDS_SCOPE not in (tok.get("scope") or "").split():
-            return _page("Google Ads access not granted", "Please tick the Google Ads permission when signing in. Try again from Claude.", 400)
+        _, required, title, ask = CONNECTOR_SCOPES[self.settings.connector]
+        if required not in (tok.get("scope") or "").split():
+            return _page(title, ask + " when signing in. Try again from Claude.", 400)
         grt = tok.get("refresh_token")
         if not grt:
             return _page("Sign-in incomplete", "Google did not return offline access. Try again from Claude.", 400)
