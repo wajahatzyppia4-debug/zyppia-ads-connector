@@ -73,6 +73,32 @@ workspace and reach the website only when it's published, which always needs ext
 deleting, custom HTML/JavaScript and raw API calls are flagged. If the Google Ads part of a combined change works
 and a Tag Manager step fails, the result says "partly done" and the undo token reverses what was made.
 
+### Phase 5B: Performance Max, Display and remarketing
+
+| Tool | What it does |
+| --- | --- |
+| `create_pmax_campaign` | A Performance Max campaign (Search, YouTube, Display, Gmail, Discover, Maps) with budget, conversion bidding, locations, languages and a first asset group: headlines, long headlines, descriptions, business name, images, logos, YouTube videos, search themes and an audience signal. With `merchant_center_id` it also advertises the Merchant Center products. Always created **paused** |
+| `list_asset_groups` | Every asset group with ad strength, each asset and its ID, signals, product listing groups, recent performance and what to improve |
+| `create_asset_group` / `update_asset_group` | Add an asset group; rename, pause, change the final URL, add or remove assets |
+| `set_pmax_signals` | Add or remove search themes, replace or remove the audience signal |
+| `set_pmax_listing_groups` | Choose which products an asset group advertises: all, only some brands / item IDs / product types / custom labels, or all except some |
+| `create_display_campaign` | A Display campaign with an ad group, targeting (remarketing lists, interests, custom audiences, keywords, placements, topics), excluded placements and a responsive display ad. Always created **paused** |
+| `create_display_ad_group` / `create_responsive_display_ad` / `update_display_targeting` | More Display ad groups, ads and targeting changes, including optimized targeting |
+| `list_audiences` | Remarketing lists with their size for Display and Search, whether ads can use them yet, and where they're used |
+| `find_audience_segments` | Find interest, in-market, affinity, topic and custom audience IDs by name |
+| `create_remarketing_list` / `update_remarketing_list` | Website-visitor lists from page rules (visited X but not Y), how long people stay, prefill with the last 30 days |
+| `create_remarketing_campaign` | A Display campaign that only shows ads to people on the given remarketing lists |
+| `update_audience_targeting` | Add audiences to Search or Display campaigns and ad groups as observation (with a bid adjustment), targeting, or exclusion |
+
+Images are public `https://` addresses of JPEG, PNG or GIF files (5 MB at most), or IDs of image assets already in
+the account. The connector downloads each one (public addresses only), checks its shape and size, and lets Google
+check the whole change. The confirm token keeps only each image's address and fingerprint: `apply_change` downloads
+it again and refuses if the file changed since the preview.
+
+Things to set up by hand: a Merchant Center account linked to the Google Ads account (for Shopping products in
+Performance Max), the Google tag on the website (so remarketing lists fill up), and working conversion tracking
+(Performance Max and conversion bidding need it). Remarketing lists only work once they have 100+ active people for
+Display and Performance Max, or 1,000+ for Search.
 ### Phase 5: Google Analytics, website tags, Search Console, Merchant Center
 
 | Tool | What it does |
