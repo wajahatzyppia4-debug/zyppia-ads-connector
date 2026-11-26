@@ -183,6 +183,47 @@ Do this once, after merging the Phase 4 pull request. Sign in as **wajahatzyppia
 
 Nothing goes live on a website until you agree to publish.
 
+## Phase 5: turn on Google Analytics, Search Console and Merchant Center
+
+Do this once, after merging the Phase 5 pull request. Sign in as **wajahatzyppia4@gmail.com**.
+
+1. **Turn on the new Google APIs.** Open Cloud Shell (<https://shell.cloud.google.com>), click the three-dot menu,
+   **Upload**, and choose `update.sh` (it's in the project files, and in this repository under `scripts/`). Then type
+   `bash update.sh` and press **Enter**. It turns on every API the connector needs, rebuilds the server, and prints
+   **DONE** when it works (about 5 minutes).
+
+   Or turn them on by hand: open each link, check the project at the top says **Zyppia Ads Connector**, click **Enable**:
+   - <https://console.cloud.google.com/apis/library/analyticsadmin.googleapis.com>
+   - <https://console.cloud.google.com/apis/library/analyticsdata.googleapis.com>
+   - <https://console.cloud.google.com/apis/library/searchconsole.googleapis.com>
+   - <https://console.cloud.google.com/apis/library/merchantapi.googleapis.com>
+2. **Add the new permissions.** Open <https://console.cloud.google.com/auth/scopes>, click **Add or remove scopes**,
+   paste these four lines into **Manually add scopes**, then click **Add to table**, **Update**, and **Save**:
+
+   ```
+   https://www.googleapis.com/auth/analytics.edit
+   https://www.googleapis.com/auth/analytics.readonly
+   https://www.googleapis.com/auth/webmasters.readonly
+   https://www.googleapis.com/auth/content
+   ```
+3. **Sign in again in Claude.** **Settings**, **Connectors**, **Zyppia Google Ads**: **Disconnect**, then **Connect**.
+   On the Google screen tick **every** box and click **Continue**.
+4. **Access to client accounts.** Your Google login needs to be a user on each client's GA4 property (Editor, to set
+   things up), Search Console site (any level), and Merchant Center account (Admin or Standard).
+5. **Merchant Center only, the first time:** if Claude says the project isn't registered, say "register the project
+   with Merchant Center account 123" and confirm.
+
+### Try it
+
+- "List my Google Analytics properties and tell me what's missing in DXB Travel."
+- "Check the tags on https://client.com and tell me if anything is doubled."
+- "Write the Tag Manager code for GTM-XXXXXX for a WordPress developer."
+- "What are people searching on Google to find client.com? Which searches should we bid on?"
+- "Which products in Merchant Center account 123 are disapproved, and why?"
+
 ## Updates
 
 Every time a pull request is merged into `main`, Cloud Run rebuilds and updates the server automatically.
+
+To update by hand (or after a failed automatic update), run `bash update.sh` in Cloud Shell. If an update ever
+breaks the connector, `bash update.sh --rollback` goes back to the version before.

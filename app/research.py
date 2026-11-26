@@ -146,8 +146,9 @@ class _PageParser(HTMLParser):
             self.text.append(t)
 
 
-def fetch_page(url: str, timeout: float = 10.0) -> dict[str, Any]:
-    """Read a public web page safely: public addresses only, redirects checked, size and time limited."""
+def fetch_html(url: str, timeout: float = 10.0) -> tuple[str, str]:
+    """Read a public web page's HTML safely: public addresses only, redirects checked, size and time limited.
+    Returns (final address, html)."""
     current = check_url(url)
     with httpx.Client(timeout=timeout, follow_redirects=False, headers={"User-Agent": USER_AGENT}) as http:
         for _ in range(5):
@@ -169,6 +170,12 @@ def fetch_page(url: str, timeout: float = 10.0) -> dict[str, Any]:
                 break
         else:
             raise AdsError("Too many redirects.")
+    return current, html
+
+
+def fetch_page(url: str, timeout: float = 10.0) -> dict[str, Any]:
+    """Read a public web page and pull out what's useful for planning a campaign."""
+    current, html = fetch_html(url, timeout)
     p = _PageParser()
     p.feed(html)
     host = urlparse(current).hostname
