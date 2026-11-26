@@ -59,8 +59,10 @@ ANALYTICS_SCOPES = [
 ]
 SEARCH_CONSOLE_SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
 MERCHANT_SCOPES = ["https://www.googleapis.com/auth/content"]
+# Phase 6, optional: Google Business Profile (locations, reviews, posts, photos, insights).
+BUSINESS_PROFILE_SCOPES = ["https://www.googleapis.com/auth/business.manage"]
 GOOGLE_SCOPES = ["openid", "email", ADWORDS_SCOPE, *TAGMANAGER_SCOPES, *ANALYTICS_SCOPES, *SEARCH_CONSOLE_SCOPES,
-                 *MERCHANT_SCOPES]
+                 *MERCHANT_SCOPES, *BUSINESS_PROFILE_SCOPES]
 
 CODE_TTL = 300
 STATE_TTL = 900

@@ -136,6 +136,36 @@ Safety rules:
 - Removals can't be undone, so the undo token doesn't cover them.
 - Every preview and applied change is logged to Cloud Logging (`zyppia.audit`) with the user and the details.
 
+### Phase 6: Google Business Profile and free local rank tracking
+
+| Tool | What it does |
+| --- | --- |
+| `gbp_list_locations` | Every Business Profile the login manages: name, address, category, phone, website, place ID, Maps and review links, problems |
+| `gbp_profile_audit` | 0-100 score and ranked fixes: description, categories, website, phone, hours, services, photos (count, logo, cover, freshness), posts in the last 7 days, unanswered reviews, rating, new reviews, verification |
+| `gbp_reviews` | Reviews newest first, average rating, total, reply rate, star split; filter to unanswered or low stars |
+| `gbp_posts` | Posts (updates, offers, events) with dates, buttons and status |
+| `gbp_insights` | Views on Search and Maps (mobile/desktop), calls, website clicks, directions, messages, bookings, versus the period before, plus the monthly search keywords people used |
+| `gbp_find_categories` | Category IDs (e.g. `gcid:plumber`) by name and country |
+| `gbp_reply_review` | Reply to a review, change or delete a reply (undo puts the old reply back) |
+| `gbp_create_post` / `gbp_delete_post` | Update, offer or event posts with a photo and a button (undo deletes the post) |
+| `gbp_add_photo` | Cover, logo, exterior, interior, team, at work, product... (undo deletes it) |
+| `gbp_update_profile` | Description, website, phone, opening hours, primary and additional categories, name (undo puts the old values back). Phone, primary category and name changes need extra confirmation |
+| `gbp_advanced_change` | Any other Business Information or v4 call (special hours, attributes, services), extra confirmation |
+| `rank_grid_scan` | Geo-grid heatmap (3x3 to 9x9) of where a business ranks for up to 5 keywords around it: 3-pack share, top-10 share, average rank, centre rank and the competitors ahead (with names) |
+| `rank_find_business` | Find any business on Maps (client, prospect, competitor) and get its place ID |
+
+**Why the rank tracker is free.** Each grid search calls Places API (New) Text Search asking only for place IDs
+(`X-Goog-FieldMask: places.id,nextPageToken`). Google bills that as "Text Search Essentials (IDs Only)", whose free
+cap on the [pricing page](https://developers.google.com/maps/billing-and-pricing/pricing) is *Unlimited*. Only
+competitor names (at most 15 per scan) and `rank_find_business` use Pro fields, which have 5,000 free calls a
+month each. A test checks that every grid search uses the IDs-only mask. The ranking is Google's local result order
+for a searcher at each point; the Google Maps app can differ a little (personalisation, ads). No scraping is used.
+
+**Business Profile access.** Google must approve the Cloud project for the Business Profile APIs once (free form,
+see docs/DEPLOY.md, Phase 6); until then every call says the quota is 0. The signed-in login must be an Owner or
+Manager of each profile. Business Profile has no "check only" mode, so changes are checked by the connector and
+sealed into the confirm token, like Tag Manager and Merchant Center.
+
 ## How it works
 
 - **Sign-in:** Claude connects using OAuth. The server sends you to "Sign in with Google", which asks for

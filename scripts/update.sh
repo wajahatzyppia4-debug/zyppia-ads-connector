@@ -18,6 +18,7 @@ APIS=(
   analyticsdata.googleapis.com      # Google Analytics reports
   searchconsole.googleapis.com      # Search Console
   merchantapi.googleapis.com        # Merchant Center
+  places.googleapis.com             # free local rank tracker (Places API New)
   run.googleapis.com cloudbuild.googleapis.com secretmanager.googleapis.com artifactregistry.googleapis.com
 )
 
@@ -44,6 +45,11 @@ fi
 
 say "1/3 Turning on the Google APIs the connector needs (safe to repeat) ..."
 gcloud services enable "${APIS[@]}"
+# Business Profile APIs: Google shows some of them only after it approves the project, so a failure here is fine.
+for A in mybusinessaccountmanagement.googleapis.com mybusinessbusinessinformation.googleapis.com \
+         mybusiness.googleapis.com businessprofileperformance.googleapis.com; do
+  gcloud services enable "$A" >/dev/null 2>&1 || echo "Note: $A isn't available yet (it appears once Google approves Business Profile API access)."
+done
 echo "OK"
 [ "${1:-}" = "--apis-only" ] && { say "DONE."; exit 0; }
 

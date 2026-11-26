@@ -221,6 +221,79 @@ Do this once, after merging the Phase 5 pull request. Sign in as **wajahatzyppia
 - "What are people searching on Google to find client.com? Which searches should we bid on?"
 - "Which products in Merchant Center account 123 are disapproved, and why?"
 
+## Phase 6: turn on Google Business Profile and the free rank tracker
+
+Do this once, after merging the Phase 6 pull request. Sign in as **wajahatzyppia4@gmail.com**.
+Nothing here costs money: the Business Profile APIs are free, and the rank tracker only uses Google's free
+"IDs only" searches plus a small part of a free monthly allowance.
+
+### 6a. Ask Google for Business Profile API access (free, one time)
+
+Google keeps these APIs at zero use until it approves the project. Approval usually takes a few days to two weeks.
+
+1. Open <https://support.google.com/business/contact/api_default>.
+2. Choose **Application for Basic API Access**.
+3. Fill it in: your email **wajahatzyppia4@gmail.com**, company **Zyppia**, website, and the project number
+   **1099251542590** (Cloud console home page shows it). Say what it's for, for example:
+   *"Agency tool to manage our clients' Business Profiles: reply to reviews, publish posts, update hours and read
+   performance insights, for profiles where we are Manager."*
+4. Google checks that your Google login manages at least one verified profile that's been live for a while and has
+   a website. Submit, then wait for Google's email.
+
+You can do 6b to 6d while you wait. Until approval, the Business Profile tools say the quota is 0, and the rank
+tracker already works.
+
+### 6b. Turn on the APIs and add the permission
+
+1. In Cloud Shell, run `bash update.sh` (upload the new copy from `scripts/` first). It turns on Places API (New) and
+   the Business Profile APIs. A note that a Business Profile API "isn't available yet" is normal before approval:
+   run `bash update.sh --apis-only` again after Google's email.
+2. Open <https://console.cloud.google.com/auth/scopes>, click **Add or remove scopes**, paste this line into
+   **Manually add scopes**, then click **Add to table**, **Update**, and **Save**:
+
+   ```
+   https://www.googleapis.com/auth/business.manage
+   ```
+
+### 6c. Create the rank tracker's API key (one copy and paste)
+
+Paste this whole block into Cloud Shell and press **Enter**. It creates a key that can only call Places API (New),
+stores it as a secret, and gives it to the server:
+
+```bash
+gcloud services enable places.googleapis.com apikeys.googleapis.com
+gcloud services api-keys create --display-name="Zyppia rank tracker" --api-target=service=places.googleapis.com
+KN=$(gcloud services api-keys list --filter="displayName='Zyppia rank tracker'" --format='value(name)' --limit=1)
+gcloud services api-keys get-key-string "$KN" --format='value(keyString)' | tr -d '\n' | gcloud secrets create zyppia-places-api-key --data-file=-
+PN=$(gcloud projects describe "$(gcloud config get-value project)" --format='value(projectNumber)')
+gcloud secrets add-iam-policy-binding zyppia-places-api-key --member="serviceAccount:${PN}-compute@developer.gserviceaccount.com" --role=roles/secretmanager.secretAccessor >/dev/null
+gcloud run services update zyppia-ads-connector --region us-central1 --update-secrets=PLACES_API_KEY=zyppia-places-api-key:latest
+echo DONE
+```
+
+### 6d. A safety net so the bill stays at zero
+
+1. Open <https://console.cloud.google.com/billing/budgets>, click **Create budget**, pick this project, set the amount
+   to **1** (your currency) and keep the email alerts on. You'll get an email if anything ever costs money.
+2. Grid searches are free without limit. Competitor names (up to 15 per scan) and `rank_find_business` come out of
+   Google's 5,000 free calls a month, which is roughly 300+ scans a month.
+
+### 6e. Sign in again in Claude
+
+**Settings**, **Connectors**, **Zyppia Google Ads**: **Disconnect**, then **Connect**, and tick **every** box
+(including Business Profile). Your login must be an **Owner or Manager** of each client's profile
+(business.google.com > the profile > **Business Profile settings** > **People and access**).
+
+### Try it
+
+- "List my Business Profiles."
+- "Audit the Business Profile of Marina Plumbing and tell me what to fix first."
+- "Show unanswered reviews for Marina Plumbing and draft replies."
+- "Write a post for this week's offer with a Book button."
+- "How did Marina Plumbing's profile do last month? Which searches found it?"
+- "Run a 7x7 rank grid for 'plumber' and 'emergency plumber' around Marina Plumbing, 1 km apart, and show it as a heatmap."
+- "Find 'Al Noor Dental Clinic Deira' on Maps and run a 5x5 grid for 'dentist' (for a prospect pitch)."
+
 ## Updates
 
 Every time a pull request is merged into `main`, Cloud Run rebuilds and updates the server automatically.

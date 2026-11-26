@@ -50,6 +50,9 @@ class Settings:
     # {customer_id: amount in the account's currency}. Changes that would go over are refused.
     spend_limits: dict[str, float] = field(default_factory=dict)
 
+    # Google Maps Platform API key for the free local rank tracker (Places API (New) only). Optional.
+    places_api_key: str | None = None
+
     access_token_ttl: int = 3600
     refresh_token_ttl: int = 60 * 60 * 24 * 30
 
@@ -108,4 +111,5 @@ def load_settings() -> Settings:
         max_increase_pct=float(os.environ.get("MAX_INCREASE_PCT") or 50),
         read_only_emails=_csv(os.environ.get("READ_ONLY_EMAILS")),
         spend_limits=_limits(os.environ.get("SPEND_LIMITS")),
+        places_api_key=os.environ.get("PLACES_API_KEY") or None,
     )
