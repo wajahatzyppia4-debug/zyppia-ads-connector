@@ -6,6 +6,7 @@ Phase 3: health check, extensions, undo (assets.py, health.py).
 Phase 4: conversion actions and Google Tag Manager (conversions.py, gtm.py).
 Phase 5: Google Analytics 4, Search Console, Merchant Center and website tag checks
 (analytics.py, search_console.py, merchant.py, sitetags.py, google_apis.py).
+Phase 6: Google Business Profile and free geo-grid local rank tracking (gbp.py, ranktrack.py).
 """
 
 from __future__ import annotations
@@ -39,7 +40,9 @@ from .display import register_display_tools
 from .gtm import register_gtm_tools
 from .analytics import register_analytics_tools
 from .google_apis import GoogleApis
+from .gbp import register_gbp_tools
 from .merchant import register_merchant_tools
+from .ranktrack import register_rank_tools
 from .search_console import register_search_console_tools
 from .sitetags import register_site_tag_tools
 from .health import HealthCheck
@@ -108,6 +111,15 @@ merchant_list_accounts, merchant_products (approval status and problems), mercha
 merchant_product_override (changes a product without touching the shop's feed). If a tool says the
 sign-in lacks a service, tell the person to reconnect the connector and tick every box. If it says an
 API is turned off, tell them to run the update script or enable it at the link given.
+
+Google Business Profile (the listing on Search and Maps): gbp_list_locations, gbp_profile_audit (0-100
+score and fixes), gbp_reviews, gbp_posts, gbp_insights (views, calls, website clicks, directions, search
+keywords). Changes, previewed like everything else: gbp_reply_review, gbp_create_post, gbp_delete_post,
+gbp_add_photo, gbp_update_profile (description, website, phone, hours, categories), gbp_advanced_change.
+Write review replies in the business's voice and never repeat a customer's personal details.
+Local rank tracking (free): rank_grid_scan gives a geo-grid of where a business ranks for each keyword
+around it, its share of the 3-pack and the competitors ahead; show the grid as a heatmap. It works for any
+business: rank_find_business finds a place ID for a prospect or competitor.
 """
 
 DATE_PRESETS = Literal[
@@ -381,6 +393,11 @@ def build_server(settings: Settings) -> FastMCP:
     register_search_console_tools(mcp, mcp.zyppia_writer, apis)
     register_merchant_tools(mcp, mcp.zyppia_writer, apis)
     register_site_tag_tools(mcp, mcp.zyppia_writer)
+
+    # ---------------------------------------------------------------- phase 6: Business Profile and local rank tracking
+
+    gbp = register_gbp_tools(mcp, mcp.zyppia_writer, apis)
+    register_rank_tools(mcp, mcp.zyppia_writer, settings, gbp)
 
     # ---------------------------------------------------------------- phase 3: audits and planning
 

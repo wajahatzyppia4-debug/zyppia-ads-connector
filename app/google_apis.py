@@ -1,4 +1,4 @@
-"""Phase 5: one gateway for the other Google APIs (Analytics, Search Console, Merchant Center).
+"""Phase 5: one gateway for the other Google APIs (Analytics, Search Console, Merchant Center, Business Profile).
 
 Every call uses the signed-in person's own Google login, like Google Ads and
 Tag Manager. These APIs have no "check only" mode, so a change tool builds a
@@ -33,7 +33,17 @@ APIS: dict[str, tuple[str, str, str, str]] = {
     "gsc": ("https://searchconsole.googleapis.com/", "Search Console", "Google Search Console API",
             "searchconsole.googleapis.com"),
     "merchant": ("https://merchantapi.googleapis.com/", "Merchant Center", "Merchant API", "merchantapi.googleapis.com"),
+    # Phase 6: Google Business Profile. Needs Google's approval of the Cloud project first (quota is 0 until then).
+    "gbp_accounts": ("https://mybusinessaccountmanagement.googleapis.com/", "Business Profile",
+                     "My Business Account Management API", "mybusinessaccountmanagement.googleapis.com"),
+    "gbp_info": ("https://mybusinessbusinessinformation.googleapis.com/", "Business Profile",
+                 "My Business Business Information API", "mybusinessbusinessinformation.googleapis.com"),
+    "gbp_v4": ("https://mybusiness.googleapis.com/", "Business Profile", "Google My Business API",
+               "mybusiness.googleapis.com"),
+    "gbp_perf": ("https://businessprofileperformance.googleapis.com/", "Business Profile",
+                 "Business Profile Performance API", "businessprofileperformance.googleapis.com"),
 }
+GBP_ACCESS_FORM = "https://support.google.com/business/contact/api_default"
 _PATH_RE = re.compile(r"^[A-Za-z0-9_\-.~%:/]+$")
 _PLACEHOLDER = re.compile(r"\$\{([a-z_]+)\}")
 
@@ -80,6 +90,14 @@ def explain(api: str, status: int, msg: str) -> str:
     if api == "merchant" and ("not registered" in low or "developer registration" in low or "registergcp" in low):
         return ("Merchant Center needs this connector's Google Cloud project registered once. Run "
                 "merchant_register_project with any Merchant Center account ID, apply it, then try again.")
+    if api.startswith("gbp_") and status == 429 and "quota" in low:
+        return ("Business Profile said the quota is used up. If this happens on the first try, Google hasn't approved "
+                "this Cloud project for the Business Profile APIs yet (until then the quota is 0). Apply once at "
+                f"{GBP_ACCESS_FORM} (choose 'Application for Basic API Access' and give the project number), then wait "
+                "for Google's email. Otherwise wait a minute and try again.")
+    if api.startswith("gbp_") and status == 403 and "permission" in low:
+        return (f"Business Profile refused: {msg} Your Google login must be an Owner or Manager of this profile "
+                "(business.google.com > the profile > Business Profile settings > People and access).")
     if status == 403:
         return f"{product} refused: {msg} (your Google login may not have access, or needs Edit/Admin rights there)."
     if status == 404:
@@ -102,9 +120,10 @@ class GoogleApis:
         url = APIS[api][0] + check_path(path)
         session = AuthorizedSession(self.ads._credentials(grt))
         r = None
-        for attempt in range(4):
+        tries = 2 if api.startswith("gbp_") else 4  # an unapproved GBP project always says 429: don't wait long
+        for attempt in range(tries):
             r = session.request(method, url, params=params, json=body, timeout=60)
-            if r.status_code == 429 or r.status_code >= 500:
+            if (r.status_code == 429 or r.status_code >= 500) and attempt < tries - 1:
                 time.sleep(2 * 2 ** attempt)
                 continue
             break
